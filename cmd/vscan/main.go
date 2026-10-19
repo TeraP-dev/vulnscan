@@ -7,12 +7,15 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime/debug"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/TeraP-ctf/vulnscan/internal/inventory"
 	"github.com/TeraP-ctf/vulnscan/internal/osv"
+	"github.com/TeraP-ctf/vulnscan/internal/progress"
 	"github.com/TeraP-ctf/vulnscan/internal/report"
 )
 
@@ -35,7 +38,9 @@ Examples:
   vscan -j | jq .          JSON output
   vscan -a                 include findings with no fix
 
-Exit codes: 0 no findings, 1 findings, 2 error
+Press Ctrl+C while scanning to cancel.
+
+Exit codes: 0 no findings, 1 findings, 2 error, 130 interrupted
 `
 
 // version comes from the module version when installed with "go install ...@vX.Y.Z".
@@ -75,7 +80,18 @@ func main() {
 		os.Exit(2)
 	}
 
-	n, err := run(ecosystem, statusPath, asJSON, all)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() { // after the first Ctrl+C, restore default behavior so a second one force-quits
+		<-ctx.Done()
+		stop()
+	}()
+
+	n, err := run(ctx, ecosystem, statusPath, asJSON, all)
+	if errors.Is(err, context.Canceled) {
+		fmt.Fprintln(os.Stderr, "vscan: interrupted")
+		os.Exit(130)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "vscan:", err)
 		os.Exit(2)
@@ -85,7 +101,7 @@ func main() {
 	}
 }
 
-func run(ecosystem, statusPath string, asJSON, all bool) (int, error) {
+func run(ctx context.Context, ecosystem, statusPath string, asJSON, all bool) (int, error) {
 	if ecosystem == "" {
 		var err error
 		if ecosystem, err = detectEcosystem("/etc/os-release"); err != nil {
@@ -120,35 +136,15 @@ func run(ecosystem, statusPath string, asJSON, all bool) (int, error) {
 		})
 	}
 
-	ctx := context.Background()
-	c := osv.New()
-	ids, err := c.QueryBatch(ctx, queries)
+	// Show progress only when stderr is a terminal, so piped output stays clean.
+	var bar *progress.Bar
+	if isTerminal(os.Stderr) {
+		bar = progress.New(os.Stderr)
+	}
+	ids, vulns, err := scan(ctx, queries, bar)
+	bar.Clear()
 	if err != nil {
 		return 0, err
-	}
-	vulns, err := fetchAll(ctx, c, flatten(ids))
-	if err != nil {
-		return 0, err
-	}
-
-	// DLA/DSA records carry no severity; fetch the DEBIAN-CVE-* records they list as upstream.
-	var extra []string
-	for _, v := range vulns {
-		if v.Score() >= 0 {
-			continue
-		}
-		for _, u := range v.Upstream {
-			if strings.HasPrefix(u, "DEBIAN-CVE-") {
-				extra = append(extra, u)
-			}
-		}
-	}
-	more, err := fetchAll(ctx, c, extra)
-	if err != nil {
-		return 0, err
-	}
-	for id, v := range more {
-		vulns[id] = v
 	}
 
 	findings := []report.Finding{}
@@ -186,6 +182,46 @@ func run(ecosystem, statusPath string, asJSON, all bool) (int, error) {
 	return len(findings), err
 }
 
+// scan does all the network work: batch query, advisory details, and the
+// DEBIAN-CVE-* records that supply severity for DLA/DSA advisories.
+func scan(ctx context.Context, queries []osv.Query, bar *progress.Bar) ([][]string, map[string]*osv.Vuln, error) {
+	c := osv.New()
+	bar.Start(fmt.Sprintf("Querying OSV for %d packages", len(queries)), 0)
+	ids, err := c.QueryBatch(ctx, queries)
+	if err != nil {
+		return nil, nil, err
+	}
+	vulns, err := fetchAll(ctx, c, flatten(ids), bar, "Fetching advisories")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var extra []string
+	for _, v := range vulns {
+		if v.Score() >= 0 {
+			continue
+		}
+		for _, u := range v.Upstream {
+			if strings.HasPrefix(u, "DEBIAN-CVE-") {
+				extra = append(extra, u)
+			}
+		}
+	}
+	more, err := fetchAll(ctx, c, extra, bar, "Fetching severity records")
+	if err != nil {
+		return nil, nil, err
+	}
+	for id, v := range more {
+		vulns[id] = v
+	}
+	return ids, vulns, nil
+}
+
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
 func flatten(ids [][]string) []string {
 	var out []string
 	for _, l := range ids {
@@ -195,24 +231,36 @@ func flatten(ids [][]string) []string {
 }
 
 // fetchAll fetches unique IDs concurrently. IDs OSV doesn't have are skipped.
-func fetchAll(ctx context.Context, c *osv.Client, ids []string) (map[string]*osv.Vuln, error) {
+// It stops early when ctx is cancelled.
+func fetchAll(ctx context.Context, c *osv.Client, ids []string, bar *progress.Bar, label string) (map[string]*osv.Vuln, error) {
 	uniq := map[string]bool{}
 	for _, id := range ids {
 		uniq[id] = true
 	}
 	out := make(map[string]*osv.Vuln, len(uniq))
+	if len(uniq) == 0 {
+		return out, nil
+	}
+	bar.Start(label, len(uniq))
+
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var firstErr error
 	sem := make(chan struct{}, 8) // at most 8 concurrent requests
 
+loop:
 	for id := range uniq {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break loop
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(id string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			v, err := c.GetVuln(ctx, id)
+			bar.Inc()
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -225,6 +273,9 @@ func fetchAll(ctx context.Context, c *osv.Client, ids []string) (map[string]*osv
 		}(id)
 	}
 	wg.Wait()
+	if firstErr == nil {
+		firstErr = ctx.Err()
+	}
 	return out, firstErr
 }
 
