@@ -43,7 +43,7 @@ vscan [flags]
   -h, --help               show this help
 ```
 
-Exit code: `0` no findings, `1` findings reported, `2` error.
+Exit code: `0` no findings, `1` findings reported, `2` error, `130` interrupted.
 
 ## How it works
 
