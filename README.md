@@ -1,6 +1,6 @@
 # vulnscan
 
-[![ci](https://github.com/TeraP-ctf/vulnscan/actions/workflows/ci.yml/badge.svg)](https://github.com/TeraP-ctf/vulnscan/actions/workflows/ci.yml)
+[![ci](https://github.com/TeraP-dev/vulnscan/actions/workflows/ci.yml/badge.svg)](https://github.com/TeraP-dev/vulnscan/actions/workflows/ci.yml)
 
 A small CLI that checks the packages installed on a Debian-based Linux system
 against the [OSV](https://osv.dev) vulnerability database and tells you which
@@ -27,7 +27,7 @@ HIGH      openssl  1.1.1n-0+deb11u1  1.1.1w-0+deb11u4  DLA-4321-1
 Requires Go (see `go.mod` for the minimum version).
 
 ```
-go install github.com/TeraP-ctf/vulnscan/cmd/vscan@latest
+go install github.com/TeraP-dev/vulnscan/cmd/vscan@latest
 ```
 
 ## Usage

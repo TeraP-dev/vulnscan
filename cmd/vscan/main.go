@@ -13,10 +13,10 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/TeraP-ctf/vulnscan/internal/inventory"
-	"github.com/TeraP-ctf/vulnscan/internal/osv"
-	"github.com/TeraP-ctf/vulnscan/internal/progress"
-	"github.com/TeraP-ctf/vulnscan/internal/report"
+	"github.com/TeraP-dev/vulnscan/internal/inventory"
+	"github.com/TeraP-dev/vulnscan/internal/osv"
+	"github.com/TeraP-dev/vulnscan/internal/progress"
+	"github.com/TeraP-dev/vulnscan/internal/report"
 )
 
 const usage = `vscan - check installed Debian packages against the OSV vulnerability database

@@ -1,4 +1,4 @@
-module github.com/TeraP-ctf/vulnscan
+module github.com/TeraP-dev/vulnscan
 
 go 1.26.7
 
