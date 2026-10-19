@@ -1,0 +1,4 @@
+/vulnscan
+/dist/
+*.test
+*.out
