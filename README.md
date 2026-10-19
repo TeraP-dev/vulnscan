@@ -13,7 +13,7 @@ pipelines rather than for checking your own machine.
 ## Example
 
 ```
-$ vulnscan --ecosystem Debian:11 --status testdata/old-status
+$ vscan -e Debian:11 -s testdata/old-status
 SEVERITY  PACKAGE  INSTALLED         FIXED IN          ID
 CRITICAL  openssl  1.1.1n-0+deb11u1  1.1.1n-0+deb11u6  DLA-3942-1
 CRITICAL  openssl  1.1.1n-0+deb11u1  1.1.1w-0+deb11u2  DLA-3942-2
@@ -27,18 +27,20 @@ HIGH      openssl  1.1.1n-0+deb11u1  1.1.1w-0+deb11u4  DLA-4321-1
 Requires Go (see `go.mod` for the minimum version).
 
 ```
-go install github.com/TeraP-ctf/vulnscan/cmd/vulnscan@latest
+go install github.com/TeraP-ctf/vulnscan/cmd/vscan@latest
 ```
 
 ## Usage
 
 ```
-vulnscan [flags]
+vscan [flags]
 
-  --ecosystem string   OSV ecosystem, e.g. Debian:13 (auto-detected on Debian)
-  --status string      dpkg status file (default /var/lib/dpkg/status)
-  --json               machine-readable output
-  --all                include findings that have no fixed version yet
+  -e, --ecosystem string   OSV ecosystem, e.g. Debian:13 (auto-detected on Debian)
+  -s, --status string      dpkg status file (default /var/lib/dpkg/status)
+  -j, --json               machine-readable output
+  -a, --all                include findings with no fixed version yet
+  -v, --version            print version and exit
+  -h, --help               show this help
 ```
 
 Exit code: `0` no findings, `1` findings reported, `2` error.

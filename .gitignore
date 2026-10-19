@@ -1,4 +1,4 @@
-/vulnscan
+/vscan
 /dist/
 *.test
 *.out

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -15,16 +16,68 @@ import (
 	"github.com/TeraP-ctf/vulnscan/internal/report"
 )
 
+const usage = `vscan - check installed Debian packages against the OSV vulnerability database
+
+Usage:
+  vscan [flags]
+
+Flags:
+  -e, --ecosystem string   OSV ecosystem, e.g. Debian:13 (auto-detected on Debian)
+  -s, --status string      dpkg status file (default /var/lib/dpkg/status)
+  -j, --json               machine-readable output
+  -a, --all                include findings with no fixed version yet
+  -v, --version            print version and exit
+  -h, --help               show this help
+
+Examples:
+  vscan                    scan this machine
+  vscan -e Debian:13       choose the ecosystem yourself (e.g. on Kali)
+  vscan -j | jq .          JSON output
+  vscan -a                 include findings with no fix
+
+Exit codes: 0 no findings, 1 findings, 2 error
+`
+
+// version comes from the module version when installed with "go install ...@vX.Y.Z".
+func version() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
+}
+
 func main() {
-	ecosystem := flag.String("ecosystem", "", "OSV ecosystem, e.g. Debian:13 (auto-detected on Debian)")
-	statusPath := flag.String("status", "/var/lib/dpkg/status", "dpkg status file")
-	asJSON := flag.Bool("json", false, "JSON output")
-	all := flag.Bool("all", false, "include findings that have no fixed version yet")
+	var (
+		ecosystem, statusPath    string
+		asJSON, all, showVersion bool
+	)
+	const defaultStatus = "/var/lib/dpkg/status"
+	flag.StringVar(&ecosystem, "ecosystem", "", "")
+	flag.StringVar(&ecosystem, "e", "", "")
+	flag.StringVar(&statusPath, "status", defaultStatus, "")
+	flag.StringVar(&statusPath, "s", defaultStatus, "")
+	flag.BoolVar(&asJSON, "json", false, "")
+	flag.BoolVar(&asJSON, "j", false, "")
+	flag.BoolVar(&all, "all", false, "")
+	flag.BoolVar(&all, "a", false, "")
+	flag.BoolVar(&showVersion, "version", false, "")
+	flag.BoolVar(&showVersion, "v", false, "")
+	flag.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	flag.Parse()
 
-	n, err := run(*ecosystem, *statusPath, *asJSON, *all)
+	if showVersion {
+		fmt.Println("vscan", version())
+		return
+	}
+	if flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "vscan: unexpected argument %q\n\n", flag.Arg(0))
+		flag.Usage()
+		os.Exit(2)
+	}
+
+	n, err := run(ecosystem, statusPath, asJSON, all)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "vulnscan:", err)
+		fmt.Fprintln(os.Stderr, "vscan:", err)
 		os.Exit(2)
 	}
 	if n > 0 {
