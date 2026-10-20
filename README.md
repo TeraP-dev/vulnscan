@@ -39,6 +39,7 @@ vscan [flags]
   -s, --status string      dpkg status file (default /var/lib/dpkg/status)
   -j, --json               machine-readable output
   -a, --all                include findings with no fixed version yet
+	-d, --details            list every finding instead of one line per package
   -v, --version            print version and exit
   -h, --help               show this help
 ```

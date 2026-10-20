@@ -29,6 +29,7 @@ Flags:
   -s, --status string      dpkg status file (default /var/lib/dpkg/status)
   -j, --json               machine-readable output
   -a, --all                include findings with no fixed version yet
+	-d, --details            list every finding instead of one line per package
   -v, --version            print version and exit
   -h, --help               show this help
 
@@ -37,6 +38,7 @@ Examples:
   vscan -e Debian:13       choose the ecosystem yourself (e.g. on Kali)
   vscan -j | jq .          JSON output
   vscan -a                 include findings with no fix
+  vscan -d                 show every advisory, not just a summary
 
 Press Ctrl+C while scanning to cancel.
 
@@ -53,8 +55,8 @@ func version() string {
 
 func main() {
 	var (
-		ecosystem, statusPath    string
-		asJSON, all, showVersion bool
+		ecosystem, statusPath             string
+		asJSON, all, details, showVersion bool
 	)
 	const defaultStatus = "/var/lib/dpkg/status"
 	flag.StringVar(&ecosystem, "ecosystem", "", "")
@@ -65,6 +67,8 @@ func main() {
 	flag.BoolVar(&asJSON, "j", false, "")
 	flag.BoolVar(&all, "all", false, "")
 	flag.BoolVar(&all, "a", false, "")
+	flag.BoolVar(&details, "details", false, "")
+	flag.BoolVar(&details, "d", false, "")
 	flag.BoolVar(&showVersion, "version", false, "")
 	flag.BoolVar(&showVersion, "v", false, "")
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usage) }
@@ -87,7 +91,7 @@ func main() {
 		stop()
 	}()
 
-	n, err := run(ctx, ecosystem, statusPath, asJSON, all)
+	n, err := run(ctx, ecosystem, statusPath, asJSON, all, details)
 	if errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "vscan: interrupted")
 		os.Exit(130)
@@ -101,7 +105,7 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, ecosystem, statusPath string, asJSON, all bool) (int, error) {
+func run(ctx context.Context, ecosystem, statusPath string, asJSON, all, details bool) (int, error) {
 	if ecosystem == "" {
 		var err error
 		if ecosystem, err = detectEcosystem("/etc/os-release"); err != nil {
@@ -168,12 +172,19 @@ func run(ctx context.Context, ecosystem, statusPath string, asJSON, all bool) (i
 		}
 	}
 	report.Sort(findings)
+	sums := report.Summarize(findings)
 
-	if asJSON {
+	switch {
+	case asJSON:
 		err = report.JSON(os.Stdout, findings)
-	} else {
+	case details:
 		report.Table(os.Stdout, findings)
-		fmt.Fprintf(os.Stderr, "\n%d packages scanned against %s, %d findings", len(keys), ecosystem, len(findings))
+	default:
+		report.SummaryTable(os.Stdout, sums)
+	}
+	if !asJSON {
+		fmt.Fprintf(os.Stderr, "\n%d packages scanned against %s: %d findings in %d packages",
+			len(keys), ecosystem, len(findings), len(sums))
 		if hidden > 0 {
 			fmt.Fprintf(os.Stderr, " (%d more with no fix available; use --all)", hidden)
 		}
