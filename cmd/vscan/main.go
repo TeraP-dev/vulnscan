@@ -13,13 +13,16 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/TeraP-dev/vulnscan/internal/debver"
 	"github.com/TeraP-dev/vulnscan/internal/inventory"
 	"github.com/TeraP-dev/vulnscan/internal/osv"
+	"github.com/TeraP-dev/vulnscan/internal/pep440"
 	"github.com/TeraP-dev/vulnscan/internal/progress"
 	"github.com/TeraP-dev/vulnscan/internal/report"
 )
 
-const usage = `vscan - check installed Debian packages against the OSV vulnerability database
+const defaultStatus = "/var/lib/dpkg/status"
+const usage = `vscan - check installed software against the OSV vulnerability database
 
 Usage:
   vscan [flags]
@@ -27,25 +30,41 @@ Usage:
 Flags:
   -e, --ecosystem string   OSV ecosystem, e.g. Debian:13 (auto-detected on Debian)
   -s, --status string      dpkg status file (default /var/lib/dpkg/status)
+  -p, --pip                scan Python packages instead of system packages
+      --python string      Python interpreter used with --pip (default python3)
   -j, --json               machine-readable output
   -a, --all                include findings with no fixed version yet
-	-d, --details            list every finding instead of one line per package
+  -d, --details            list every finding instead of one line per package
   -f, --fix                print an apt command that upgrades the affected packages
   -v, --version            print version and exit
   -h, --help               show this help
 
 Examples:
-  vscan                    scan this machine
-  vscan -e Debian:13       choose the ecosystem yourself (e.g. on Kali)
-  vscan -j | jq .          JSON output
-  vscan -a                 include findings with no fix
-  vscan -d                 show every advisory, not just a summary
-  vscan -f                 print the apt command to apply the upgrades
+  vscan                         scan this machine's system packages
+  vscan -e Debian:13            choose the ecosystem yourself (e.g. on Kali)
+  vscan -f                      print the apt command to apply the upgrades
+  vscan -p                      scan the Python packages of python3 on your PATH
+  vscan -p --python ./venv/bin/python
+  vscan -j | jq .               JSON output
 
 Press Ctrl+C while scanning to cancel.
 
 Exit codes: 0 no findings, 1 findings, 2 error, 130 interrupted
 `
+
+type options struct {
+	ecosystem, statusPath, python string
+	pip                           bool
+	asJSON, all, details, fix     bool
+}
+
+// target is one installed thing to look up in OSV.
+type target struct {
+	name     string   // name as queried
+	version  string   // version as queried
+	display  string   // name shown to the user
+	binaries []string // dpkg only: installed binary packages built from this source
+}
 
 // version comes from the module version when installed with "go install ...@vX.Y.Z".
 func version() string {
@@ -55,24 +74,29 @@ func version() string {
 	return "dev"
 }
 
+func fatalf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "vscan: "+format+"\n", args...)
+	os.Exit(2)
+}
+
 func main() {
-	var (
-		ecosystem, statusPath                  string
-		asJSON, all, details, fix, showVersion bool
-	)
-	const defaultStatus = "/var/lib/dpkg/status"
-	flag.StringVar(&ecosystem, "ecosystem", "", "")
-	flag.StringVar(&ecosystem, "e", "", "")
-	flag.StringVar(&statusPath, "status", defaultStatus, "")
-	flag.StringVar(&statusPath, "s", defaultStatus, "")
-	flag.BoolVar(&asJSON, "json", false, "")
-	flag.BoolVar(&asJSON, "j", false, "")
-	flag.BoolVar(&all, "all", false, "")
-	flag.BoolVar(&all, "a", false, "")
-	flag.BoolVar(&details, "details", false, "")
-	flag.BoolVar(&details, "d", false, "")
-	flag.BoolVar(&fix, "fix", false, "")
-	flag.BoolVar(&fix, "f", false, "")
+	var o options
+	var showVersion bool
+	flag.StringVar(&o.ecosystem, "ecosystem", "", "")
+	flag.StringVar(&o.ecosystem, "e", "", "")
+	flag.StringVar(&o.statusPath, "status", defaultStatus, "")
+	flag.StringVar(&o.statusPath, "s", defaultStatus, "")
+	flag.BoolVar(&o.pip, "pip", false, "")
+	flag.BoolVar(&o.pip, "p", false, "")
+	flag.StringVar(&o.python, "python", "python3", "")
+	flag.BoolVar(&o.asJSON, "json", false, "")
+	flag.BoolVar(&o.asJSON, "j", false, "")
+	flag.BoolVar(&o.all, "all", false, "")
+	flag.BoolVar(&o.all, "a", false, "")
+	flag.BoolVar(&o.details, "details", false, "")
+	flag.BoolVar(&o.details, "d", false, "")
+	flag.BoolVar(&o.fix, "fix", false, "")
+	flag.BoolVar(&o.fix, "f", false, "")
 	flag.BoolVar(&showVersion, "version", false, "")
 	flag.BoolVar(&showVersion, "v", false, "")
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usage) }
@@ -87,6 +111,12 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
+	if o.pip && o.ecosystem != "" {
+		fatalf("--pip and --ecosystem cannot be combined")
+	}
+	if o.pip && o.fix {
+		fatalf("--fix is not supported with --pip yet")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -95,7 +125,7 @@ func main() {
 		stop()
 	}()
 
-	n, err := run(ctx, ecosystem, statusPath, asJSON, all, details, fix)
+	n, err := run(ctx, o)
 	if errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "vscan: interrupted")
 		os.Exit(130)
@@ -109,41 +139,32 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, ecosystem, statusPath string, asJSON, all, details, fix bool) (int, error) {
-	if ecosystem == "" {
-		var err error
-		if ecosystem, err = detectEcosystem("/etc/os-release"); err != nil {
-			return 0, err
+func run(ctx context.Context, o options) (int, error) {
+	ecosystem := o.ecosystem
+	compare := debver.Compare
+	var targets []target
+	var err error
+	if o.pip {
+		ecosystem, compare = "PyPI", pep440.Compare
+		targets, err = pipTargets(ctx, o.python)
+	} else {
+		if ecosystem == "" {
+			if ecosystem, err = detectEcosystem("/etc/os-release"); err != nil {
+				return 0, err
+			}
 		}
+		targets, err = dpkgTargets(o.statusPath)
 	}
-	f, err := os.Open(statusPath)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	pkgs, err := inventory.ParseDpkgStatus(f)
 	if err != nil {
 		return 0, err
 	}
 
-	// One query per unique (source package, version); remember which binary packages belong to each source so we can build upgrade commands.
-	type key struct{ src, ver string }
-	seen := map[key]bool{}
-	bins := map[key][]string{}
-	var keys []key
-	var queries []osv.Query
-	for _, p := range pkgs {
-		k := key{p.Source, p.QueryVersion()}
-		bins[k] = append(bins[k], p.Name)
-		if seen[k] {
-			continue
+	queries := make([]osv.Query, len(targets))
+	for i, t := range targets {
+		queries[i] = osv.Query{
+			Package: osv.Package{Name: t.name, Ecosystem: ecosystem},
+			Version: t.version,
 		}
-		seen[k] = true
-		keys = append(keys, k)
-		queries = append(queries, osv.Query{
-			Package: osv.Package{Name: k.src, Ecosystem: ecosystem},
-			Version: k.ver,
-		})
 	}
 
 	// Show progress only when stderr is a terminal, so piped output stays clean.
@@ -159,55 +180,121 @@ func run(ctx context.Context, ecosystem, statusPath string, asJSON, all, details
 
 	findings := []report.Finding{}
 	hidden := 0
-	for i, k := range keys {
+	for i, t := range targets {
+		returned := map[string]bool{}
+		for _, id := range ids[i] {
+			returned[id] = true
+		}
 		for _, id := range ids[i] {
 			v := vulns[id]
-			fixed := strings.Join(v.FixedVersions(k.src, ecosystem), ", ")
-			if fixed == "" && !all {
+			if v == nil || superseded(v, returned) {
+				continue
+			}
+			fixed := strings.Join(v.FixedVersions(t.name, ecosystem), ", ")
+			if fixed == "" && !o.all {
 				hidden++
 				continue
 			}
 			findings = append(findings, report.Finding{
-				Package:  k.src,
-				Version:  k.ver,
+				Package:  t.display,
+				Version:  t.version,
 				ID:       id,
 				Score:    v.ScoreWithUpstream(vulns),
 				Fixed:    fixed,
-				Binaries: bins[k],
 				Summary:  v.Summary,
+				Binaries: t.binaries,
 			})
 		}
 	}
 	report.Sort(findings)
-	sums := report.Summarize(findings)
+	sums := report.Summarize(findings, compare)
 
 	switch {
-	case asJSON:
+	case o.asJSON:
 		err = report.JSON(os.Stdout, findings)
-	case fix:
+	case o.fix:
 		if cmd := report.FixCommand(sums); cmd != "" {
 			fmt.Println(cmd)
 		}
-	case details:
+	case o.details:
 		report.Table(os.Stdout, findings)
 	default:
 		report.SummaryTable(os.Stdout, sums)
 	}
-	if !asJSON {
+	if !o.asJSON {
 		fmt.Fprintf(os.Stderr, "\n%d packages scanned against %s: %d findings in %d packages",
-			len(keys), ecosystem, len(findings), len(sums))
+			len(targets), ecosystem, len(findings), len(sums))
 		if hidden > 0 {
 			fmt.Fprintf(os.Stderr, " (%d more with no fix available; use --all)", hidden)
 		}
 		fmt.Fprintln(os.Stderr)
-		if !details && !fix && len(sums) > 0 {
+		if !o.details && !o.fix && !o.pip && len(sums) > 0 {
 			fmt.Fprintln(os.Stderr, "Run vscan -f for an apt command that applies these upgrades.")
 		}
 	}
 	return len(findings), err
 }
 
-// scan does all the network work: batch query, advisory details, and the DEBIAN-CVE-* records that supply severity for DLA/DSA advisories.
+// dpkgTargets groups installed packages by (source package, source version),
+// which is how Debian advisories are keyed.
+func dpkgTargets(statusPath string) ([]target, error) {
+	f, err := os.Open(statusPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	pkgs, err := inventory.ParseDpkgStatus(f)
+	if err != nil {
+		return nil, err
+	}
+	type key struct{ src, ver string }
+	idx := map[key]int{}
+	var out []target
+	for _, p := range pkgs {
+		k := key{p.Source, p.QueryVersion()}
+		i, ok := idx[k]
+		if !ok {
+			i = len(out)
+			idx[k] = i
+			out = append(out, target{name: k.src, version: k.ver, display: k.src})
+		}
+		out[i].binaries = append(out[i].binaries, p.Name)
+	}
+	return out, nil
+}
+
+func pipTargets(ctx context.Context, python string) ([]target, error) {
+	pkgs, err := inventory.ListPython(ctx, python)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]target, 0, len(pkgs))
+	for _, p := range pkgs {
+		out = append(out, target{
+			name:    osv.NormalizeName("PyPI", p.Name),
+			version: p.Version,
+			display: p.Name,
+		})
+	}
+	return out, nil
+}
+
+// superseded reports whether v is a PYSEC record already covered by another
+// returned record (the same bug usually also has a GHSA record with severity).
+func superseded(v *osv.Vuln, returned map[string]bool) bool {
+	if !strings.HasPrefix(v.ID, "PYSEC-") {
+		return false
+	}
+	for _, a := range v.Aliases {
+		if returned[a] {
+			return true
+		}
+	}
+	return false
+}
+
+// scan does all the network work: batch query, advisory details, and the
+// DEBIAN-CVE-* records that supply severity for DLA/DSA advisories.
 func scan(ctx context.Context, queries []osv.Query, bar *progress.Bar) ([][]string, map[string]*osv.Vuln, error) {
 	c := osv.New()
 	bar.Start(fmt.Sprintf("Querying OSV for %d packages", len(queries)), 0)

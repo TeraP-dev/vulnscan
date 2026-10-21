@@ -1,6 +1,11 @@
 package report
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/TeraP-dev/vulnscan/internal/debver"
+	"github.com/TeraP-dev/vulnscan/internal/pep440"
+)
 
 func TestSortAndLabel(t *testing.T) {
 	fs := []Finding{
@@ -23,10 +28,11 @@ func TestSummarize(t *testing.T) {
 	fs := []Finding{
 		{Package: "bind9", Version: "1:9.20.23-1", ID: "1", Score: 7.5, Fixed: "1:9.20.26-1~deb13u1"},
 		{Package: "bind9", Version: "1:9.20.23-1", ID: "2", Score: 8.1, Fixed: "1:9.20.29-1~deb13u1"},
-		{Package: "openssl", Version: "1.1.1n-0+deb11u1", ID: "3", Score: 9.8, Fixed: "1.1.1n-0+deb11u6, 1.1.1w-0+deb11u5"},
-		{Package: "nofix", Version: "1.0", ID: "4", Score: -1},
+		{Package: "openssl", Version: "1.1.1n-0+deb11u1", ID: "3", Score: 9.8, Fixed: "1.1.1n-0+deb11u6"},
+		{Package: "openssl", Version: "1.1.1n-0+deb11u1", ID: "4", Score: 7.0, Fixed: "1.1.1w-0+deb11u5"},
+		{Package: "nofix", Version: "1.0", ID: "5", Score: -1},
 	}
-	got := Summarize(fs)
+	got := Summarize(fs, debver.Compare)
 	if len(got) != 3 || got[0].Package != "openssl" || got[1].Package != "bind9" || got[2].Package != "nofix" {
 		t.Fatalf("unexpected order or length: %+v", got)
 	}
@@ -38,6 +44,14 @@ func TestSummarize(t *testing.T) {
 	}
 	if got[2].UpgradeTo != "" {
 		t.Errorf("nofix should have no upgrade, got %q", got[2].UpgradeTo)
+	}
+}
+
+func TestSummarizeBranches(t *testing.T) {
+	// Installed 3.2.5 with fixes on two branches: the smallest upgrade is 3.2.12, not 4.0.2.
+	fs := []Finding{{Package: "django", Version: "3.2.5", ID: "1", Score: 7.5, Fixed: "3.2.12, 4.0.2"}}
+	if got := Summarize(fs, pep440.Compare); got[0].UpgradeTo != "3.2.12" {
+		t.Errorf("got %q, want 3.2.12", got[0].UpgradeTo)
 	}
 }
 

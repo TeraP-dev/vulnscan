@@ -25,3 +25,17 @@ func TestScoreWithUpstream(t *testing.T) {
 		t.Errorf("got %v, want -1 for no data", got)
 	}
 }
+
+func TestFixedVersionsPyPIName(t *testing.T) {
+	var v Vuln
+	js := `{"id":"X","affected":[{"package":{"name":"Django_Test","ecosystem":"PyPI"},"ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"},{"fixed":"1.2.3"}]}]}]}`
+	if err := json.Unmarshal([]byte(js), &v); err != nil {
+		t.Fatal(err)
+	}
+	if got := v.FixedVersions("django-test", "PyPI"); len(got) != 1 || got[0] != "1.2.3" {
+		t.Errorf("got %v", got)
+	}
+	if NormalizeName("PyPI", "Foo.Bar__baz") != "foo-bar-baz" {
+		t.Error("bad normalization")
+	}
+}

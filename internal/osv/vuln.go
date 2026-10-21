@@ -1,10 +1,25 @@
 package osv
 
+import (
+	"regexp"
+	"strings"
+)
+
+var pypiSeparators = regexp.MustCompile(`[-_.]+`)
+
+// NormalizeName applies the ecosystem's package-name normalization (PEP 503 for PyPI).
+func NormalizeName(ecosystem, name string) string {
+	if ecosystem != "PyPI" {
+		return name
+	}
+	return strings.ToLower(pypiSeparators.ReplaceAllString(name, "-"))
+}
+
 // FixedVersions lists fixed versions OSV reports for this source package in this ecosystem.
 func (v *Vuln) FixedVersions(pkg, ecosystem string) []string {
 	var out []string
 	for _, a := range v.Affected {
-		if a.Package.Name != pkg || a.Package.Ecosystem != ecosystem {
+		if NormalizeName(ecosystem, a.Package.Name) != NormalizeName(ecosystem, pkg) || a.Package.Ecosystem != ecosystem {
 			continue
 		}
 		for _, r := range a.Ranges {

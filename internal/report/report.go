@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
-
-	"github.com/TeraP-dev/vulnscan/internal/debver"
 )
 
 type Finding struct {
@@ -64,8 +62,10 @@ func Sort(fs []Finding) {
 	})
 }
 
-// Summarize groups findings by package. Fixed versions are comma-joined in Finding.Fixed, Debian versions never contain ", ", so splitting is safe.
-func Summarize(fs []Finding) []PackageSummary {
+// Summarize groups findings by package. compare orders version strings for the
+// ecosystem. Fixed versions are comma-joined in Finding.Fixed; versions never
+// contain ", ", so splitting is safe.
+func Summarize(fs []Finding, compare func(a, b string) int) []PackageSummary {
 	type key struct{ pkg, ver string }
 	idx := map[key]int{}
 	var out []PackageSummary
@@ -85,10 +85,8 @@ func Summarize(fs []Finding) []PackageSummary {
 		if f.Fixed == "" {
 			continue
 		}
-		for _, v := range strings.Split(f.Fixed, ", ") {
-			if s.UpgradeTo == "" || debver.Compare(v, s.UpgradeTo) > 0 {
-				s.UpgradeTo = v
-			}
+		if v := lowestFix(f, compare); s.UpgradeTo == "" || compare(v, s.UpgradeTo) > 0 {
+			s.UpgradeTo = v
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -102,6 +100,24 @@ func Summarize(fs []Finding) []PackageSummary {
 		return a.Package < b.Package
 	})
 	return out
+}
+
+// lowestFix returns the lowest fixed version newer than the installed one, which is the smallest upgrade that resolves this finding.
+// If none is newer, it returns the highest fixed version.
+func lowestFix(f Finding, compare func(a, b string) int) string {
+	above, highest := "", ""
+	for _, v := range strings.Split(f.Fixed, ", ") {
+		if highest == "" || compare(v, highest) > 0 {
+			highest = v
+		}
+		if compare(v, f.Version) > 0 && (above == "" || compare(v, above) < 0) {
+			above = v
+		}
+	}
+	if above != "" {
+		return above
+	}
+	return highest
 }
 
 func Table(w io.Writer, fs []Finding) {
