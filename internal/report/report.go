@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -12,21 +13,23 @@ import (
 )
 
 type Finding struct {
-	Package string  `json:"package"`
-	Version string  `json:"version"`
-	ID      string  `json:"id"`
-	Score   float64 `json:"score"` // -1 = unknown
-	Fixed   string  `json:"fixed_in"`
-	Summary string  `json:"summary"`
+	Package  string   `json:"package"`
+	Version  string   `json:"version"`
+	ID       string   `json:"id"`
+	Score    float64  `json:"score"` // -1 = unknown
+	Fixed    string   `json:"fixed_in"`
+	Summary  string   `json:"summary"`
+	Binaries []string `json:"-"`
 }
 
 // PackageSummary is one line per package: what to upgrade to and why.
 type PackageSummary struct {
-	Package   string  `json:"package"`
-	Installed string  `json:"installed"`
-	UpgradeTo string  `json:"upgrade_to"` // newest fixed version; "" if none is available
-	Score     float64 `json:"score"`      // highest score among findings; -1 = unknown
-	Findings  int     `json:"findings"`
+	Package   string   `json:"package"`
+	Installed string   `json:"installed"`
+	UpgradeTo string   `json:"upgrade_to"` // newest fixed version; "" if none is available
+	Score     float64  `json:"score"`      // highest score among findings; -1 = unknown
+	Findings  int      `json:"findings"`
+	Binaries  []string `json:"binaries"`
 }
 
 func Label(score float64) string {
@@ -72,7 +75,7 @@ func Summarize(fs []Finding) []PackageSummary {
 		if !ok {
 			i = len(out)
 			idx[k] = i
-			out = append(out, PackageSummary{Package: f.Package, Installed: f.Version, Score: f.Score})
+			out = append(out, PackageSummary{Package: f.Package, Installed: f.Version, Score: f.Score, Binaries: f.Binaries})
 		}
 		s := &out[i]
 		s.Findings++
@@ -131,4 +134,33 @@ func JSON(w io.Writer, fs []Finding) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(fs)
+}
+
+// Debian package names: lowercase letters, digits, "+", "-", ".", starting with a letter or digit.
+var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9+.\-]+$`)
+
+// FixCommand returns an apt command that upgrades the installed binary packages of every package that has a fixed version available, or "" if there are none.
+// Names are validated so the result is safe to paste into a shell.
+func FixCommand(ps []PackageSummary) string {
+	var lines []string
+	for _, p := range ps {
+		if p.UpgradeTo == "" {
+			continue
+		}
+		var names []string
+		for _, n := range p.Binaries {
+			if validName.MatchString(n) {
+				names = append(names, n)
+			}
+		}
+		if len(names) == 0 {
+			continue
+		}
+		sort.Strings(names)
+		lines = append(lines, strings.Join(names, " "))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "sudo apt update && sudo apt install --only-upgrade \\\n  " + strings.Join(lines, " \\\n  ")
 }

@@ -30,6 +30,7 @@ Flags:
   -j, --json               machine-readable output
   -a, --all                include findings with no fixed version yet
 	-d, --details            list every finding instead of one line per package
+  -f, --fix                print an apt command that upgrades the affected packages
   -v, --version            print version and exit
   -h, --help               show this help
 
@@ -39,6 +40,7 @@ Examples:
   vscan -j | jq .          JSON output
   vscan -a                 include findings with no fix
   vscan -d                 show every advisory, not just a summary
+  vscan -f                 print the apt command to apply the upgrades
 
 Press Ctrl+C while scanning to cancel.
 
@@ -55,8 +57,8 @@ func version() string {
 
 func main() {
 	var (
-		ecosystem, statusPath             string
-		asJSON, all, details, showVersion bool
+		ecosystem, statusPath                  string
+		asJSON, all, details, fix, showVersion bool
 	)
 	const defaultStatus = "/var/lib/dpkg/status"
 	flag.StringVar(&ecosystem, "ecosystem", "", "")
@@ -69,6 +71,8 @@ func main() {
 	flag.BoolVar(&all, "a", false, "")
 	flag.BoolVar(&details, "details", false, "")
 	flag.BoolVar(&details, "d", false, "")
+	flag.BoolVar(&fix, "fix", false, "")
+	flag.BoolVar(&fix, "f", false, "")
 	flag.BoolVar(&showVersion, "version", false, "")
 	flag.BoolVar(&showVersion, "v", false, "")
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usage) }
@@ -91,7 +95,7 @@ func main() {
 		stop()
 	}()
 
-	n, err := run(ctx, ecosystem, statusPath, asJSON, all, details)
+	n, err := run(ctx, ecosystem, statusPath, asJSON, all, details, fix)
 	if errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "vscan: interrupted")
 		os.Exit(130)
@@ -105,7 +109,7 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, ecosystem, statusPath string, asJSON, all, details bool) (int, error) {
+func run(ctx context.Context, ecosystem, statusPath string, asJSON, all, details, fix bool) (int, error) {
 	if ecosystem == "" {
 		var err error
 		if ecosystem, err = detectEcosystem("/etc/os-release"); err != nil {
@@ -122,13 +126,15 @@ func run(ctx context.Context, ecosystem, statusPath string, asJSON, all, details
 		return 0, err
 	}
 
-	// One query per unique (source package, version).
+	// One query per unique (source package, version); remember which binary packages belong to each source so we can build upgrade commands.
 	type key struct{ src, ver string }
 	seen := map[key]bool{}
+	bins := map[key][]string{}
 	var keys []key
 	var queries []osv.Query
 	for _, p := range pkgs {
 		k := key{p.Source, p.QueryVersion()}
+		bins[k] = append(bins[k], p.Name)
 		if seen[k] {
 			continue
 		}
@@ -162,12 +168,13 @@ func run(ctx context.Context, ecosystem, statusPath string, asJSON, all, details
 				continue
 			}
 			findings = append(findings, report.Finding{
-				Package: k.src,
-				Version: k.ver,
-				ID:      id,
-				Score:   v.ScoreWithUpstream(vulns),
-				Fixed:   fixed,
-				Summary: v.Summary,
+				Package:  k.src,
+				Version:  k.ver,
+				ID:       id,
+				Score:    v.ScoreWithUpstream(vulns),
+				Fixed:    fixed,
+				Binaries: bins[k],
+				Summary:  v.Summary,
 			})
 		}
 	}
@@ -177,6 +184,10 @@ func run(ctx context.Context, ecosystem, statusPath string, asJSON, all, details
 	switch {
 	case asJSON:
 		err = report.JSON(os.Stdout, findings)
+	case fix:
+		if cmd := report.FixCommand(sums); cmd != "" {
+			fmt.Println(cmd)
+		}
 	case details:
 		report.Table(os.Stdout, findings)
 	default:
@@ -189,12 +200,14 @@ func run(ctx context.Context, ecosystem, statusPath string, asJSON, all, details
 			fmt.Fprintf(os.Stderr, " (%d more with no fix available; use --all)", hidden)
 		}
 		fmt.Fprintln(os.Stderr)
+		if !details && !fix && len(sums) > 0 {
+			fmt.Fprintln(os.Stderr, "Run vscan -f for an apt command that applies these upgrades.")
+		}
 	}
 	return len(findings), err
 }
 
-// scan does all the network work: batch query, advisory details, and the
-// DEBIAN-CVE-* records that supply severity for DLA/DSA advisories.
+// scan does all the network work: batch query, advisory details, and the DEBIAN-CVE-* records that supply severity for DLA/DSA advisories.
 func scan(ctx context.Context, queries []osv.Query, bar *progress.Bar) ([][]string, map[string]*osv.Vuln, error) {
 	c := osv.New()
 	bar.Start(fmt.Sprintf("Querying OSV for %d packages", len(queries)), 0)

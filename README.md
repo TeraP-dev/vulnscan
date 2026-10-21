@@ -40,6 +40,7 @@ vscan [flags]
   -j, --json               machine-readable output
   -a, --all                include findings with no fixed version yet
 	-d, --details            list every finding instead of one line per package
+  -f, --fix                print an apt command that upgrades the affected packages
   -v, --version            print version and exit
   -h, --help               show this help
 ```

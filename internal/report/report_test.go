@@ -40,3 +40,18 @@ func TestSummarize(t *testing.T) {
 		t.Errorf("nofix should have no upgrade, got %q", got[2].UpgradeTo)
 	}
 }
+
+func TestFixCommand(t *testing.T) {
+	ps := []PackageSummary{
+		{Package: "libheif", UpgradeTo: "1.23.4-1", Binaries: []string{"libheif1", "libheif-plugin-x265"}},
+		{Package: "nofix", Binaries: []string{"nofix"}},
+		{Package: "evil", UpgradeTo: "1", Binaries: []string{"ok-pkg", "bad; rm -rf ~", "-oops"}},
+	}
+	want := "sudo apt update && sudo apt install --only-upgrade \\\n  libheif-plugin-x265 libheif1 \\\n  ok-pkg"
+	if got := FixCommand(ps); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if FixCommand(nil) != "" {
+		t.Error("no packages should give an empty command")
+	}
+}
