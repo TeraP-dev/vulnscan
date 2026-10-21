@@ -142,10 +142,11 @@ func main() {
 func run(ctx context.Context, o options) (int, error) {
 	ecosystem := o.ecosystem
 	compare := debver.Compare
+	var line func(string) string // compatibility line of a version; nil when not applicable
 	var targets []target
 	var err error
 	if o.pip {
-		ecosystem, compare = "PyPI", pep440.Compare
+		ecosystem, compare, line = "PyPI", pep440.Compare, pep440.Line
 		targets, err = pipTargets(ctx, o.python)
 	} else {
 		if ecosystem == "" {
@@ -207,7 +208,7 @@ func run(ctx context.Context, o options) (int, error) {
 		}
 	}
 	report.Sort(findings)
-	sums := report.Summarize(findings, compare)
+	sums := report.Summarize(findings, compare, line)
 
 	switch {
 	case o.asJSON:
@@ -222,7 +223,18 @@ func run(ctx context.Context, o options) (int, error) {
 		report.SummaryTable(os.Stdout, sums)
 	}
 	if !o.asJSON {
-		fmt.Fprintf(os.Stderr, "\n%d packages scanned against %s: %d findings in %d packages",
+		var notes []string
+		if !o.details && !o.fix {
+			notes = report.Notes(sums)
+		}
+		fmt.Fprintln(os.Stderr)
+		for _, n := range notes {
+			fmt.Fprintln(os.Stderr, n)
+		}
+		if len(notes) > 0 {
+			fmt.Fprintln(os.Stderr)
+		}
+		fmt.Fprintf(os.Stderr, "%d packages scanned against %s: %d findings in %d packages",
 			len(targets), ecosystem, len(findings), len(sums))
 		if hidden > 0 {
 			fmt.Fprintf(os.Stderr, " (%d more with no fix available; use --all)", hidden)

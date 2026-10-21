@@ -32,7 +32,7 @@ func TestSummarize(t *testing.T) {
 		{Package: "openssl", Version: "1.1.1n-0+deb11u1", ID: "4", Score: 7.0, Fixed: "1.1.1w-0+deb11u5"},
 		{Package: "nofix", Version: "1.0", ID: "5", Score: -1},
 	}
-	got := Summarize(fs, debver.Compare)
+	got := Summarize(fs, debver.Compare, nil)
 	if len(got) != 3 || got[0].Package != "openssl" || got[1].Package != "bind9" || got[2].Package != "nofix" {
 		t.Fatalf("unexpected order or length: %+v", got)
 	}
@@ -50,8 +50,34 @@ func TestSummarize(t *testing.T) {
 func TestSummarizeBranches(t *testing.T) {
 	// Installed 3.2.5 with fixes on two branches: the smallest upgrade is 3.2.12, not 4.0.2.
 	fs := []Finding{{Package: "django", Version: "3.2.5", ID: "1", Score: 7.5, Fixed: "3.2.12, 4.0.2"}}
-	if got := Summarize(fs, pep440.Compare); got[0].UpgradeTo != "3.2.12" {
+	if got := Summarize(fs, pep440.Compare, nil); got[0].UpgradeTo != "3.2.12" {
 		t.Errorf("got %q, want 3.2.12", got[0].UpgradeTo)
+	}
+}
+
+func TestSummarizeKeepLine(t *testing.T) {
+	fs := []Finding{
+		{Package: "urllib3", Version: "1.26.4", ID: "1", Score: 7, Fixed: "1.26.5"},
+		{Package: "urllib3", Version: "1.26.4", ID: "2", Score: 7, Fixed: "2.0.6, 1.26.17"},
+		{Package: "urllib3", Version: "1.26.4", ID: "3", Score: 7, Fixed: "2.8.0"},
+		{Package: "idna", Version: "2.10", ID: "4", Score: 5, Fixed: "3.7"},
+		{Package: "same", Version: "1.0", ID: "5", Score: 4, Fixed: "1.2"},
+	}
+	by := map[string]PackageSummary{}
+	for _, s := range Summarize(fs, pep440.Compare, pep440.Line) {
+		by[s.Package] = s
+	}
+	if u := by["urllib3"]; u.UpgradeTo != "2.8.0" || !u.MajorJump || u.KeepLineTo != "1.26.17" || u.KeepLineFixes != 2 {
+		t.Errorf("urllib3: %+v", u)
+	}
+	if i := by["idna"]; i.UpgradeTo != "3.7" || !i.MajorJump || i.KeepLineTo != "" || i.KeepLineFixes != 0 {
+		t.Errorf("idna: %+v", i)
+	}
+	if s := by["same"]; s.MajorJump || s.KeepLineTo != "" {
+		t.Errorf("same: %+v", s)
+	}
+	if n := Notes([]PackageSummary{by["urllib3"], by["idna"], by["same"]}); len(n) != 2 {
+		t.Errorf("want 2 notes, got %d", len(n))
 	}
 }
 

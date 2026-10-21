@@ -22,12 +22,15 @@ type Finding struct {
 
 // PackageSummary is one line per package: what to upgrade to and why.
 type PackageSummary struct {
-	Package   string   `json:"package"`
-	Installed string   `json:"installed"`
-	UpgradeTo string   `json:"upgrade_to"` // newest fixed version; "" if none is available
-	Score     float64  `json:"score"`      // highest score among findings; -1 = unknown
-	Findings  int      `json:"findings"`
-	Binaries  []string `json:"binaries"`
+	Package       string   `json:"package"`
+	Installed     string   `json:"installed"`
+	UpgradeTo     string   `json:"upgrade_to"` // newest fixed version; "" if none is available
+	Score         float64  `json:"score"`      // highest score among findings; -1 = unknown
+	Findings      int      `json:"findings"`
+	Binaries      []string `json:"binaries"`
+	MajorJump     bool     `json:"major_jump"`                // the full fix is on a different line than the installed version
+	KeepLineTo    string   `json:"keep_line_to,omitempty"`    // best fix that stays on the installed line
+	KeepLineFixes int      `json:"keep_line_fixes,omitempty"` // findings that fix resolves
 }
 
 func Label(score float64) string {
@@ -63,9 +66,9 @@ func Sort(fs []Finding) {
 }
 
 // Summarize groups findings by package. compare orders version strings for the
-// ecosystem. Fixed versions are comma-joined in Finding.Fixed; versions never
-// contain ", ", so splitting is safe.
-func Summarize(fs []Finding, compare func(a, b string) int) []PackageSummary {
+// ecosystem. line maps a version to its compatibility line (for example its
+// major version); it may be nil, which turns off the keep-line information.
+func Summarize(fs []Finding, compare func(a, b string) int, line func(string) string) []PackageSummary {
 	type key struct{ pkg, ver string }
 	idx := map[key]int{}
 	var out []PackageSummary
@@ -88,6 +91,23 @@ func Summarize(fs []Finding, compare func(a, b string) int) []PackageSummary {
 		if v := lowestFix(f, compare); s.UpgradeTo == "" || compare(v, s.UpgradeTo) > 0 {
 			s.UpgradeTo = v
 		}
+		if line != nil {
+			if v := lowestFixIn(f, compare, line); v != "" {
+				s.KeepLineFixes++
+				if s.KeepLineTo == "" || compare(v, s.KeepLineTo) > 0 {
+					s.KeepLineTo = v
+				}
+			}
+		}
+	}
+	if line != nil {
+		for i := range out {
+			s := &out[i]
+			s.MajorJump = s.UpgradeTo != "" && line(s.Installed) != "" && line(s.UpgradeTo) != line(s.Installed)
+			if !s.MajorJump {
+				s.KeepLineTo, s.KeepLineFixes = "", 0
+			}
+		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]
@@ -99,6 +119,45 @@ func Summarize(fs []Finding, compare func(a, b string) int) []PackageSummary {
 		}
 		return a.Package < b.Package
 	})
+	return out
+}
+
+// lowestFixIn is like lowestFix but only considers fixed versions on the same
+// line as the installed version. It returns "" if there is none.
+func lowestFixIn(f Finding, compare func(a, b string) int, line func(string) string) string {
+	own := line(f.Version)
+	if own == "" {
+		return ""
+	}
+	best := ""
+	for _, v := range strings.Split(f.Fixed, ", ") {
+		if line(v) != own || compare(v, f.Version) <= 0 {
+			continue
+		}
+		if best == "" || compare(v, best) < 0 {
+			best = v
+		}
+	}
+	return best
+}
+
+// Notes explains packages whose full fix needs a new major version.
+func Notes(ps []PackageSummary) []string {
+	var out []string
+	for _, p := range ps {
+		if !p.MajorJump {
+			continue
+		}
+		if p.KeepLineFixes > 0 {
+			out = append(out, fmt.Sprintf(
+				"note: %s %s: %s stays on the same major version and fixes %d of %d findings; the full fix (%s) is a new major version.",
+				p.Package, p.Installed, p.KeepLineTo, p.KeepLineFixes, p.Findings, p.UpgradeTo))
+		} else {
+			out = append(out, fmt.Sprintf(
+				"note: %s %s: no fix on the same major version; the full fix (%s) is a new major version.",
+				p.Package, p.Installed, p.UpgradeTo))
+		}
+	}
 	return out
 }
 

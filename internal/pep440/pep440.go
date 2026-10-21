@@ -22,6 +22,16 @@ type version struct {
 	local   []string
 }
 
+// Line returns the compatibility line of a version: its epoch and first release
+// segment ("0!1" for 1.26.4). It returns "" for versions that don't parse.
+func Line(s string) string {
+	v, ok := parse(s)
+	if !ok {
+		return ""
+	}
+	return strconv.Itoa(v.epoch) + "!" + strconv.Itoa(v.release[0])
+}
+
 // Compare returns -1, 0 or 1 as a is older than, equal to, or newer than b.
 // Strings that are not valid PEP 440 versions fall back to plain string comparison.
 func Compare(a, b string) int {

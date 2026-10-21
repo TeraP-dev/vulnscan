@@ -36,3 +36,9 @@ func TestLocal(t *testing.T) {
 		t.Error("local version ordering is wrong")
 	}
 }
+
+func TestLine(t *testing.T) {
+	if Line("1.26.4") != Line("1.26.19") || Line("1.26.4") == Line("2.0.0") || Line("garbage") != "" {
+		t.Error("Line groups versions incorrectly")
+	}
+}
