@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -25,9 +26,10 @@ const defaultStatus = "/var/lib/dpkg/status"
 const usage = `vscan - check installed software against the OSV vulnerability database
 
 Usage:
-  vscan [flags]
+  vscan [flags]        (with no flags, this help is shown)
 
 Flags:
+  -S, --system             scan system packages (dpkg)
   -e, --ecosystem string   OSV ecosystem, e.g. Debian:13 (auto-detected on Debian)
   -s, --status string      dpkg status file (default /var/lib/dpkg/status)
   -p, --pip                scan Python packages instead of system packages
@@ -35,18 +37,22 @@ Flags:
   -j, --json               machine-readable output
   -a, --all                include findings with no fixed version yet
   -d, --details            list every finding instead of one line per package
-  -f, --fix                print an apt command that upgrades the affected packages
+  -f, --fix                list the findings and print an apt command that upgrades them
   -v, --version            print version and exit
   -h, --help               show this help
 
+Any flag other than -v and -h starts a scan; system packages are scanned
+unless you pass -p.
+
 Examples:
-  vscan                         scan this machine's system packages
+  vscan -S                      scan this machine's system packages
   vscan -e Debian:13            choose the ecosystem yourself (e.g. on Kali)
-  vscan -f                      print the apt command to apply the upgrades
+  vscan -f                      list findings and print the apt command to fix them
   vscan -p                      scan the Python packages of python3 on your PATH
   vscan -p --python ./venv/bin/python
   vscan -j | jq .               JSON output
 
+Needs internet access: package names and versions are sent to api.osv.dev.
 Press Ctrl+C while scanning to cancel.
 
 Exit codes: 0 no findings, 1 findings, 2 error, 130 interrupted
@@ -54,7 +60,7 @@ Exit codes: 0 no findings, 1 findings, 2 error, 130 interrupted
 
 type options struct {
 	ecosystem, statusPath, python string
-	pip                           bool
+	pip, system                   bool
 	asJSON, all, details, fix     bool
 }
 
@@ -80,8 +86,12 @@ func fatalf(format string, args ...any) {
 }
 
 func main() {
+	if len(os.Args) == 1 {
+		fmt.Print(usage)
+		return
+	}
 	var o options
-	var showVersion bool
+	var showVersion, help bool
 	flag.StringVar(&o.ecosystem, "ecosystem", "", "")
 	flag.StringVar(&o.ecosystem, "e", "", "")
 	flag.StringVar(&o.statusPath, "status", defaultStatus, "")
@@ -99,9 +109,17 @@ func main() {
 	flag.BoolVar(&o.fix, "f", false, "")
 	flag.BoolVar(&showVersion, "version", false, "")
 	flag.BoolVar(&showVersion, "v", false, "")
+	flag.BoolVar(&o.system, "system", false, "")
+	flag.BoolVar(&o.system, "S", false, "")
+	flag.BoolVar(&help, "help", false, "")
+	flag.BoolVar(&help, "h", false, "")
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	flag.Parse()
 
+	if help {
+		fmt.Print(usage)
+		return
+	}
 	if showVersion {
 		fmt.Println("vscan", version())
 		return
@@ -117,6 +135,9 @@ func main() {
 	if o.pip && o.fix {
 		fatalf("--fix is not supported with --pip yet")
 	}
+	if o.pip && o.system {
+		fatalf("--pip and --system cannot be combined")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -131,7 +152,12 @@ func main() {
 		os.Exit(130)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "vscan:", err)
+		var ne net.Error
+		if errors.As(err, &ne) {
+			fmt.Fprintln(os.Stderr, "vscan: cannot reach api.osv.dev (are you offline?):", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "vscan:", err)
+		}
 		os.Exit(2)
 	}
 	if n > 0 {
@@ -214,6 +240,13 @@ func run(ctx context.Context, o options) (int, error) {
 	case o.asJSON:
 		err = report.JSON(os.Stdout, findings)
 	case o.fix:
+		// Findings go to stderr so that stdout carries only the command.
+		if o.details {
+			report.Table(os.Stderr, findings)
+		} else {
+			report.SummaryTable(os.Stderr, sums)
+		}
+		fmt.Fprintln(os.Stderr)
 		if cmd := report.FixCommand(sums); cmd != "" {
 			fmt.Println(cmd)
 		}
