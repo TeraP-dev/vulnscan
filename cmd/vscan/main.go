@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,7 +31,7 @@ Usage:
 
 Flags:
   -S, --system             scan system packages (dpkg)
-  -e, --ecosystem string   OSV ecosystem, e.g. Debian:13 (auto-detected on Debian)
+  -e, --ecosystem string   OSV ecosystem, e.g. Debian:13 or Ubuntu:22.04:LTS (auto-detected on Debian and Ubuntu)
   -s, --status string      dpkg status file (default /var/lib/dpkg/status)
   -p, --pip                scan Python packages instead of system packages
       --python string      Python interpreter used with --pip (default python3)
@@ -324,15 +325,23 @@ func pipTargets(ctx context.Context, python string) ([]target, error) {
 	return out, nil
 }
 
-// superseded reports whether v is a PYSEC record already covered by another
-// returned record (the same bug usually also has a GHSA record with severity).
+// superseded reports whether v is covered by another returned record: a PYSEC
+// record whose alias was also returned (the GHSA twin), or a USN notice whose
+// per-CVE UBUNTU-CVE records were returned (they carry the release-specific
+// fix and severity).
 func superseded(v *osv.Vuln, returned map[string]bool) bool {
-	if !strings.HasPrefix(v.ID, "PYSEC-") {
-		return false
-	}
-	for _, a := range v.Aliases {
-		if returned[a] {
-			return true
+	switch {
+	case strings.HasPrefix(v.ID, "PYSEC-"):
+		for _, a := range v.Aliases {
+			if returned[a] {
+				return true
+			}
+		}
+	case strings.HasPrefix(v.ID, "USN-"):
+		for _, u := range v.Upstream {
+			if returned["UBUNTU-"+u] {
+				return true
+			}
 		}
 	}
 	return false
@@ -448,8 +457,26 @@ func detectEcosystem(path string) (string, error) {
 			kv[k] = strings.Trim(v, `"'`)
 		}
 	}
-	if kv["ID"] == "debian" && kv["VERSION_ID"] != "" {
-		return "Debian:" + kv["VERSION_ID"], nil
+	switch kv["ID"] {
+	case "debian":
+		if v := kv["VERSION_ID"]; v != "" {
+			return "Debian:" + v, nil
+		}
+	case "ubuntu":
+		if v := kv["VERSION_ID"]; v != "" {
+			if isLTS(v) {
+				return "Ubuntu:" + v + ":LTS", nil
+			}
+			return "Ubuntu:" + v, nil
+		}
 	}
-	return "", fmt.Errorf("auto-detect supports Debian only (found ID=%q); pass --ecosystem, e.g. Debian:13", kv["ID"])
+	return "", fmt.Errorf("auto-detect supports Debian and Ubuntu only (found ID=%q); pass --ecosystem, e.g. Debian:13 or Ubuntu:22.04:LTS", kv["ID"])
+}
+
+// isLTS reports whether an Ubuntu VERSION_ID such as "22.04" is an LTS release:
+// an April release in an even year.
+func isLTS(v string) bool {
+	year, month, ok := strings.Cut(v, ".")
+	n, err := strconv.Atoi(year)
+	return ok && err == nil && month == "04" && n%2 == 0
 }

@@ -39,3 +39,24 @@ func TestFixedVersionsPyPIName(t *testing.T) {
 		t.Error("bad normalization")
 	}
 }
+
+func TestScoreUbuntuPriority(t *testing.T) {
+	parse := func(s string) *Vuln {
+		var v Vuln
+		if err := json.Unmarshal([]byte(s), &v); err != nil {
+			t.Fatal(err)
+		}
+		return &v
+	}
+	if got := parse(`{"id":"X","severity":[{"type":"Ubuntu","score":"medium"}]}`).Score(); got != 4.0 {
+		t.Errorf("priority only: got %v, want 4.0", got)
+	}
+	// CVSS wins over Ubuntu's label when both exist.
+	both := `{"id":"Y","severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"},{"type":"Ubuntu","score":"high"}]}`
+	if got := parse(both).Score(); got != 6.1 {
+		t.Errorf("CVSS plus priority: got %v, want 6.1", got)
+	}
+	if got := parse(`{"id":"Z","severity":[{"type":"Ubuntu","score":"untriaged"}]}`).Score(); got != -1 {
+		t.Errorf("unknown label: got %v, want -1", got)
+	}
+}
