@@ -73,8 +73,15 @@ type target struct {
 	binaries []string // dpkg only: installed binary packages built from this source
 }
 
-// version comes from the module version when installed with "go install ...@vX.Y.Z".
+// buildVersion is set at release time with -ldflags "-X main.buildVersion=...".
+var buildVersion string
+
+// version prefers the release-time value, then the module version that
+// "go install ...@vX.Y.Z" records.
 func version() string {
+	if buildVersion != "" {
+		return buildVersion
+	}
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
 		return info.Main.Version
 	}

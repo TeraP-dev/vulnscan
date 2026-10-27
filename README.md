@@ -2,118 +2,97 @@
 
 [![ci](https://github.com/TeraP-dev/vulnscan/actions/workflows/ci.yml/badge.svg)](https://github.com/TeraP-dev/vulnscan/actions/workflows/ci.yml)
 
-Check the software installed on your machine against the [OSV](https://osv.dev) vulnerability database and see **what to upgrade, and to which version**.
+Check the software installed on your machine against the [OSV](https://osv.dev)
+vulnerability database and see **what to upgrade, and to which version**.
 
-- Scans system packages on Debian-family Linux (via dpkg) and Python packages (via pip)
+- System packages on Debian and Ubuntu (via dpkg) and Python packages (via pip)
 - One line per package, ranked by severity, with the version to upgrade to
-- Prints the `apt` command that applies the fixes. It never runs anything itself.
+- Prints the `apt` command that applies the fixes; it never runs anything itself
 
-It exists because the free tool for this job on Windows (Secunia PSI) was retired in 2018, and most Linux scanners are built for containers and CI pipelines rather than for checking your own machine.
+Made this because the free tool for this job on Windows (Secunia PSI) was retired in 2018, and most
+Linux scanners target containers and CI rather than your own machine.
+Also, this project is vibecoded (lol) so do your own research before using it, I'm not responsible for any losses, the project is under MIT license.
 
 ## Example
 
-The repository includes a small test file with an old OpenSSL, so you can
-reproduce this:
-
 ```
-$ vscan -e Debian:11 -s testdata/old-status
+$ vscan -e Debian:11 -s testdata/old-status     # old OpenSSL fixture included in the repo
 SEVERITY  PACKAGE  INSTALLED         UPGRADE TO        FINDINGS
 CRITICAL  openssl  1.1.1n-0+deb11u1  1.1.1w-0+deb11u5  9
-
-1 packages scanned against Debian:11: 9 findings in 1 packages
-Run vscan -f for an apt command that applies these upgrades.
 ```
 
-Advisories are published all the time, so the numbers you see may differ.
+Advisories change over time, so the numbers you see may differ.
 
 ## Install
 
-Requires Go (see `go.mod` for the minimum version).
-
 ```
-go install github.com/TeraP-dev/vulnscan/cmd/vscan@latest
+go install github.com/TeraP-dev/vulnscan/cmd/vscan@latest    # needs Go; installs to ~/go/bin
 ```
 
-Go installs into `~/go/bin`. If `vscan` is not found afterwards, add that
-folder to your `PATH`.
-
-## Quick start
-
-```
-vscan                 # scan system packages (Debian is auto-detected)
-vscan -e Debian:13    # choose the ecosystem yourself, e.g. on Kali
-vscan -f              # print the apt command that applies the upgrades
-vscan -d              # list every advisory instead of one line per package
-vscan -p              # scan Python packages instead
-```
-
-## Reading the output
-
-| Column | Meaning |
-|---|---|
-| SEVERITY | Highest CVSS base score among the package's findings: CRITICAL (9.0+), HIGH (7.0+), MEDIUM (4.0+), LOW (below 4.0), UNKNOWN (no score available) |
-| PACKAGE | Source package (system) or package name (Python) |
-| INSTALLED | The version you have |
-| UPGRADE TO | Upgrade to this version **or newer** to resolve all listed findings |
-| FINDINGS | Number of advisories that affect your installed version |
-
-**How `UPGRADE TO` is chosen:** for each advisory, the lowest fixed version that
-is newer than yours; for the package, the highest of those. On Kali, a version
-without Debian's suffix still counts: `2.1.13-stable-1` is newer than
-`2.1.13-stable-1~deb13u1`.
-
-Progress is shown on stderr while scanning (only when stderr is a terminal), so
-piping the output stays clean. Press Ctrl+C to cancel.
+Or download the Linux binary (amd64/arm64) from
+[Releases](https://github.com/TeraP-dev/vulnscan/releases), check it against
+`checksums.txt`, and put `vscan` on your `PATH`.
 
 ## Usage
 
 ```
-vscan [flags]
+vscan -S              # scan system packages (Debian and Ubuntu are auto-detected)
+vscan -e Debian:13    # pick the ecosystem yourself, e.g. on Kali
+vscan -f              # list the findings and print the apt command that fixes them
+vscan -p              # scan Python packages instead
+vscan                 # no flags: show help
 ```
 
-| Flag | Meaning |
-|---|---|
-| `-e`, `--ecosystem` | OSV ecosystem, e.g. `Debian:13` (auto-detected on Debian) |
-| `-s`, `--status` | dpkg status file (default `/var/lib/dpkg/status`) |
-| `-p`, `--pip` | Scan Python packages instead of system packages |
-| `--python` | Python interpreter used with `--pip` (default `python3`) |
-| `-j`, `--json` | Machine-readable output, one entry per finding |
-| `-a`, `--all` | Include findings with no fixed version yet |
-| `-d`, `--details` | List every finding instead of one line per package |
-| `-f`, `--fix` | Print an apt command that upgrades the affected packages |
-| `-v`, `--version` | Print version and exit |
-| `-h`, `--help` | Show help |
+```
+-S, --system       scan system packages (dpkg)
+-e, --ecosystem    OSV ecosystem, e.g. Debian:13 or Ubuntu:22.04:LTS
+-s, --status       dpkg status file (default /var/lib/dpkg/status)
+-p, --pip          scan Python packages instead
+    --python       interpreter for --pip (default python3)
+-j, --json         JSON output, one entry per finding
+-a, --all          include findings with no fix yet
+-d, --details      one line per finding instead of per package
+-f, --fix          list findings and print an apt command that upgrades them
+-v, --version      print version
+-h, --help         show help
+```
 
-Exit codes: `0` no findings, `1` findings reported, `2` error, `130` interrupted.
+Exit codes: `0` no findings, `1` findings, `2` error, `130` interrupted
+(Ctrl+C cancels a scan). Progress is shown on stderr only when it is a terminal,
+so piped output stays clean.
+
+## Reading the output
+
+- **SEVERITY**: highest CVSS base score among the package's findings (CRITICAL
+  9.0+, HIGH 7.0+, MEDIUM 4.0+, LOW below; UNKNOWN = no score). On Ubuntu, when
+  there is no CVSS score, Ubuntu's own priority is used.
+- **UPGRADE TO**: upgrade to this version **or newer** to resolve all findings.
+  For each advisory it takes the lowest fix above your version, then the highest
+  of those. On Kali, `2.1.13-stable-1` counts as newer than
+  `2.1.13-stable-1~deb13u1`.
+- **FINDINGS**: number of advisories that affect your version (`-d` lists them).
 
 ## Fixing system packages
 
-`vscan -f` prints a command and nothing else. You decide whether to run it:
+`vscan -f` prints the findings to stderr and the command to stdout, so
+`vscan -f > fix.sh` captures just the command. It never runs it:
 
 ```
-$ vscan -e Debian:11 -s testdata/old-status -f
 sudo apt update && sudo apt install --only-upgrade \
   libssl1.1
 ```
 
-- It only upgrades packages that are already installed (`--only-upgrade`).
-- apt shows its plan and asks before changing anything. Read it.
-- Your configured repositories decide which versions are available. They may not
-  offer the exact fix yet. Run `vscan` again afterwards to see what is left.
+- It only upgrades packages you already have; apt shows its plan and asks first.
+- Your repositories decide which versions exist. Run `vscan` again afterwards to
+  see what is left.
 - On rolling distributions such as Kali, check the distribution's guidance on
-  partial upgrades before cherry-picking packages.
-- Package names are validated before they are put in the command, so a crafted
-  status file cannot inject shell syntax.
-- Multi-arch packages (for example `libc6:i386`) are not architecture-qualified.
+  partial upgrades first.
+- Package names are validated, so a crafted status file cannot inject shell syntax.
 
 ## Python packages
 
-`vscan -p` checks what `python3 -m pip list` reports. Use `--python` to scan a
-virtualenv or another interpreter:
-
 ```
-$ python3 -m venv /tmp/oldenv && /tmp/oldenv/bin/pip install 'requests==2.25.0' 'urllib3==1.26.4'
-$ vscan -p --python /tmp/oldenv/bin/python
+$ vscan -p --python /tmp/oldenv/bin/python     # a virtualenv with requests 2.25.0, urllib3 1.26.4
 SEVERITY  PACKAGE   INSTALLED  UPGRADE TO  FINDINGS
 HIGH      urllib3   1.26.4     2.8.0       11
 MEDIUM    idna      2.10       3.15        2
@@ -121,53 +100,38 @@ MEDIUM    requests  2.25.0     2.33.0      4
 MEDIUM    pip       26.1.2     26.2.0      1
 ```
 
-- One interpreter per run. Scan each environment separately.
-- `UPGRADE TO` resolves **all** listed findings, so it can be a major-version
-  jump (above, urllib3 1.x to 2.x). Use `-d` to see each advisory's fix.
-- When the full fix needs a new major version, a note on stderr shows the best
-  fix that stays on your current one and how many findings it resolves.
-- Some advisories have no severity and show as `UNKNOWN`.
+- One interpreter per run; `--python` selects a virtualenv.
+- `UPGRADE TO` fixes everything, so it can be a major-version jump (urllib3 1.x
+  to 2.x). A note on stderr then shows the best fix that stays on your major version.
 - `--fix` is not supported for Python yet.
 
 ## How it works
 
-**System packages**
-
-1. Reads installed packages from the dpkg status file and groups them by source
-   package and source version, which is how Debian advisories are keyed.
-2. Sends them to the OSV API in batches.
-3. Fetches each matching advisory for its fixed version. Debian security
-   advisories (DSA/DLA) carry no score, so the score is taken from the
-   `DEBIAN-CVE-*` records they reference.
-4. Ranks by CVSS base score (v3 and v4 supported), groups findings by package,
-   and prints one line per package.
-
-**Python packages**
-
-Same flow, but the inventory comes from `pip list`, names are normalized as in
-PEP 503, versions are compared with PEP 440 rules, and duplicate `PYSEC`/`GHSA`
-records for the same bug are collapsed.
+Installed packages are read from the dpkg status file and grouped by source
+package and version (how Debian and Ubuntu key their advisories), then sent to
+the OSV API in batches. Each matching advisory supplies the fixed version;
+severity comes from CVSS v3/v4, taken from the `DEBIAN-CVE-*` records behind
+Debian advisories. On Ubuntu, per-CVE records are kept and the `USN` notices
+that duplicate them are dropped. For Python, the inventory comes from `pip list`,
+names follow PEP 503, versions are ordered by PEP 440, and duplicate
+`PYSEC`/`GHSA` records are collapsed.
 
 ## Limitations
 
-- **System packages: Debian-family only, via dpkg.** Auto-detection supports
-  Debian; for other dpkg-based distributions pass `--ecosystem` yourself. Ubuntu
-  is untested.
+- **Debian and Ubuntu via dpkg only.** For other dpkg-based distributions pass
+  `--ecosystem`. Ubuntu is tested against a fixture, not yet on a real machine.
+  For Ubuntu Pro (ESM) fixes use e.g. `-e Ubuntu:Pro:22.04:LTS`.
 - **Kali is best-effort.** OSV has no Kali ecosystem, so use the Debian release
-  Kali currently tracks. Kali runs ahead of stable Debian, so expect some
-  mismatches.
-- **Not scanned:** software installed outside dpkg and pip (npm, snap, Go
-  binaries, anything installed by hand).
-- **"No fix" is hidden by default.** A finding with no fixed version means the
-  advisory data lists none. It does not mean your system is safe or unpatched.
-  Use `--all` to see these; expect noise.
-- **Severity is a CVSS base score**, not a measure of how likely exploitation
-  is. Findings with no score show as `UNKNOWN`.
-- **Network use.** Package names and versions of everything scanned are sent to
-  `api.osv.dev`. Nothing else, such as your hostname, is sent. With `--pip`,
-  vscan also runs `<python> -m pip list` locally.
-- Results with very many vulnerabilities for a single package may be truncated
-  (OSV pagination is not followed yet).
+  Kali tracks and expect some mismatches.
+- **Not scanned:** npm, snap, Go binaries, anything installed by hand.
+- **Findings with no fix are hidden** (`-a` shows them; expect noise). "No fix"
+  in the data does not mean you are safe or unpatched.
+- **Severity is CVSS, not exploitability.**
+- **Needs internet.** Package names and versions (nothing else) are sent to
+  `api.osv.dev`; nothing is cached. With `--pip`, vscan also runs
+  `<python> -m pip list` locally.
+- Multi-arch packages are not architecture-qualified in `--fix` output, and very
+  large result sets may be truncated (OSV pagination is not followed).
 
 ## License
 

@@ -1,0 +1,30 @@
+version: 2
+project_name: vulnscan
+
+builds:
+  - id: vscan
+    main: ./cmd/vscan
+    binary: vscan
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.buildVersion={{.Tag}}
+
+archives:
+  - name_template: "vscan_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
