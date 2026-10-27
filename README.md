@@ -9,6 +9,8 @@ vulnerability database and see **what to upgrade, and to which version**.
 - One line per package, ranked by severity, with the version to upgrade to
 - Prints the `apt` command that applies the fixes; it never runs anything itself
 
+![vscan demo](docs/demo.gif)
+
 Made this because the free tool for this job on Windows (Secunia PSI) was retired in 2018, and most
 Linux scanners target containers and CI rather than your own machine.
 Also, this project is vibecoded (lol) so do your own research before using it, I'm not responsible for any losses, the project is under MIT license.

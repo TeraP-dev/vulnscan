@@ -7,6 +7,7 @@ type_cmd() {
   sleep 0.4
   printf '\n'
   bash -c "$1"
+  printf '\n'
   sleep 2.5
 }
 
