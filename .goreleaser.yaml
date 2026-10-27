@@ -17,6 +17,17 @@ builds:
     ldflags:
       - -s -w -X main.buildVersion={{.Tag}}
 
+nfpms:
+  - id: vulnscan
+    package_name: vulnscan
+    formats:
+      - deb
+    maintainer: "TeraP-dev"
+    homepage: https://github.com/TeraP-dev/vulnscan
+    description: Check installed packages against the OSV vulnerability database.
+    license: MIT
+    bindir: /usr/bin
+
 archives:
   - name_template: "vscan_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
     files:

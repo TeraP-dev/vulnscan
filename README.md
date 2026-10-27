@@ -26,12 +26,19 @@ Advisories change over time, so the numbers you see may differ.
 ## Install
 
 ```
-go install github.com/TeraP-dev/vulnscan/cmd/vscan@latest    # needs Go; installs to ~/go/bin
+# Debian/Ubuntu: download the .deb from Releases, then
+sudo apt install ./vulnscan_<version>_linux_<arch>.deb    # installs /usr/bin/vscan; run again to upgrade
+
+# any Linux: download the .tar.gz instead, then
+sudo install vscan /usr/local/bin/
+
+# with Go
+go install github.com/TeraP-dev/vulnscan/cmd/vscan@latest    # installs to ~/go/bin; run again to upgrade
 ```
 
-Or download the Linux binary (amd64/arm64) from
-[Releases](https://github.com/TeraP-dev/vulnscan/releases), check it against
-`checksums.txt`, and put `vscan` on your `PATH`.
+Releases are on the [Releases page](https://github.com/TeraP-dev/vulnscan/releases)
+for `amd64` and `arm64`, with a `checksums.txt`. If `vscan -v` shows an old
+version, an older copy is earlier on your `PATH`: run `type -a vscan`.
 
 ## Usage
 
