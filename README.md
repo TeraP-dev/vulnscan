@@ -47,7 +47,7 @@ version, an older copy is earlier on your `PATH`: run `type -a vscan`.
 ```
 vscan -S              # scan system packages (Debian and Ubuntu are auto-detected)
 vscan -e Debian:13    # pick the ecosystem yourself, e.g. on Kali
-vscan -f              # list the findings and print the apt command that fixes them
+vscan -f              # list findings and print a command (apt, or pip with -p) that upgrades them
 vscan -p              # scan Python packages instead
 vscan                 # no flags: show help
 ```
@@ -61,7 +61,7 @@ vscan                 # no flags: show help
 -j, --json         JSON output, one entry per finding
 -a, --all          include findings with no fix yet
 -d, --details      one line per finding instead of per package
--f, --fix          list findings and print an apt command that upgrades them
+-f, --fix          list findings and print a command (apt, or pip with -p) that upgrades them
 -v, --version      print version
 -h, --help         show help
 ```
@@ -112,7 +112,6 @@ MEDIUM    pip       26.1.2     26.2.0      1
 - One interpreter per run; `--python` selects a virtualenv.
 - `UPGRADE TO` fixes everything, so it can be a major-version jump (urllib3 1.x
   to 2.x). A note on stderr then shows the best fix that stays on your major version.
-- `--fix` is not supported for Python yet.
 
 ## How it works
 

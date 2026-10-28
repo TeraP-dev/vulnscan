@@ -180,6 +180,10 @@ func lowestFix(f Finding, compare func(a, b string) int) string {
 }
 
 func Table(w io.Writer, fs []Finding) {
+	if len(fs) == 0 {
+		fmt.Fprintln(w, "No findings.")
+		return
+	}
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
 	fmt.Fprintln(tw, "SEVERITY\tPACKAGE\tINSTALLED\tFIXED IN\tID")
 	for _, f := range fs {
@@ -193,6 +197,10 @@ func Table(w io.Writer, fs []Finding) {
 }
 
 func SummaryTable(w io.Writer, ps []PackageSummary) {
+	if len(ps) == 0 {
+		fmt.Fprintln(w, "No findings.")
+		return
+	}
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
 	fmt.Fprintln(tw, "SEVERITY\tPACKAGE\tINSTALLED\tUPGRADE TO\tFINDINGS")
 	for _, p := range ps {
@@ -238,4 +246,41 @@ func FixCommand(ps []PackageSummary) string {
 		return ""
 	}
 	return "sudo apt update && sudo apt install --only-upgrade \\\n  " + strings.Join(lines, " \\\n  ")
+}
+
+var (
+	pyName    = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`)
+	pyVersion = regexp.MustCompile(`^[A-Za-z0-9.!+_-]+$`)
+	plainWord = regexp.MustCompile(`^[A-Za-z0-9_./+-]+$`)
+)
+
+// FixCommandPip returns a pip command that upgrades every package that has a
+// fixed version available, or "" if there are none. Names and versions are
+// validated and every requirement is single-quoted, so the result is safe to
+// paste into a shell.
+func FixCommandPip(ps []PackageSummary, python string) string {
+	var specs []string
+	for _, p := range ps {
+		if p.UpgradeTo == "" || !pyName.MatchString(p.Package) || !pyVersion.MatchString(p.UpgradeTo) {
+			continue
+		}
+		specs = append(specs, shellQuote(p.Package+">="+p.UpgradeTo))
+	}
+	if len(specs) == 0 {
+		return ""
+	}
+	return shellWord(python) + " -m pip install --upgrade \\\n  " + strings.Join(specs, " \\\n  ")
+}
+
+// shellQuote wraps s in single quotes for POSIX shells.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellWord quotes s only when it contains characters a shell would treat specially.
+func shellWord(s string) string {
+	if plainWord.MatchString(s) {
+		return s
+	}
+	return shellQuote(s)
 }

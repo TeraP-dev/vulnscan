@@ -1,6 +1,7 @@
 package report
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/TeraP-dev/vulnscan/internal/debver"
@@ -93,5 +94,35 @@ func TestFixCommand(t *testing.T) {
 	}
 	if FixCommand(nil) != "" {
 		t.Error("no packages should give an empty command")
+	}
+}
+
+func TestFixCommandPip(t *testing.T) {
+	ps := []PackageSummary{
+		{Package: "urllib3", UpgradeTo: "2.8.0"},
+		{Package: "nofix"},
+		{Package: "evil'; rm -rf ~", UpgradeTo: "1.0"},
+		{Package: "badver", UpgradeTo: "1.0'; echo x"},
+		{Package: "PyYAML", UpgradeTo: "6.0.1"},
+	}
+	want := "python3 -m pip install --upgrade \\\n  'urllib3>=2.8.0' \\\n  'PyYAML>=6.0.1'"
+	if got := FixCommandPip(ps, "python3"); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if got := FixCommandPip(ps[1:2], "python3"); got != "" {
+		t.Errorf("no fixable packages should give an empty command, got %q", got)
+	}
+	want = "'/my venv/bin/python' -m pip install --upgrade \\\n  'urllib3>=2.8.0'"
+	if got := FixCommandPip(ps[:1], "/my venv/bin/python"); got != want {
+		t.Errorf("interpreter path with a space: got %q", got)
+	}
+}
+
+func TestEmptyTables(t *testing.T) {
+	var b bytes.Buffer
+	Table(&b, nil)
+	SummaryTable(&b, nil)
+	if got := b.String(); got != "No findings.\nNo findings.\n" {
+		t.Errorf("got %q", got)
 	}
 }

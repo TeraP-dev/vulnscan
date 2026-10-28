@@ -38,7 +38,7 @@ Flags:
   -j, --json               machine-readable output
   -a, --all                include findings with no fixed version yet
   -d, --details            list every finding instead of one line per package
-  -f, --fix                list the findings and print an apt command that upgrades them
+  -f, --fix                list findings and print a command (apt, or pip with -p) that upgrades them
   -v, --version            print version and exit
   -h, --help               show this help
 
@@ -139,9 +139,6 @@ func main() {
 	}
 	if o.pip && o.ecosystem != "" {
 		fatalf("--pip and --ecosystem cannot be combined")
-	}
-	if o.pip && o.fix {
-		fatalf("--fix is not supported with --pip yet")
 	}
 	if o.pip && o.system {
 		fatalf("--pip and --system cannot be combined")
@@ -248,14 +245,25 @@ func run(ctx context.Context, o options) (int, error) {
 	case o.asJSON:
 		err = report.JSON(os.Stdout, findings)
 	case o.fix:
-		// Findings go to stderr so that stdout carries only the command.
+		// Findings and notes go to stderr so that stdout carries only the command.
 		if o.details {
 			report.Table(os.Stderr, findings)
 		} else {
 			report.SummaryTable(os.Stderr, sums)
 		}
 		fmt.Fprintln(os.Stderr)
-		if cmd := report.FixCommand(sums); cmd != "" {
+		notes := report.Notes(sums)
+		for _, n := range notes {
+			fmt.Fprintln(os.Stderr, n)
+		}
+		if len(notes) > 0 {
+			fmt.Fprintln(os.Stderr)
+		}
+		cmd := report.FixCommand(sums)
+		if o.pip {
+			cmd = report.FixCommandPip(sums, o.python)
+		}
+		if cmd != "" {
 			fmt.Println(cmd)
 		}
 	case o.details:
@@ -281,8 +289,12 @@ func run(ctx context.Context, o options) (int, error) {
 			fmt.Fprintf(os.Stderr, " (%d more with no fix available; use --all)", hidden)
 		}
 		fmt.Fprintln(os.Stderr)
-		if !o.details && !o.fix && !o.pip && len(sums) > 0 {
-			fmt.Fprintln(os.Stderr, "Run vscan -f for an apt command that applies these upgrades.")
+		if !o.details && !o.fix && len(sums) > 0 {
+			hint := "vscan -f for an apt command"
+			if o.pip {
+				hint = "vscan -p -f for a pip command"
+			}
+			fmt.Fprintf(os.Stderr, "Run %s that applies these upgrades.\n", hint)
 		}
 	}
 	return len(findings), err
