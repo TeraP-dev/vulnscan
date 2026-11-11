@@ -18,6 +18,7 @@ type Finding struct {
 	Fixed    string   `json:"fixed_in"`
 	Summary  string   `json:"summary"`
 	Binaries []string `json:"-"`
+	UsedBy   []string `json:"used_by,omitempty"`
 }
 
 // PackageSummary is one line per package: what to upgrade to and why.
@@ -31,6 +32,7 @@ type PackageSummary struct {
 	MajorJump     bool     `json:"major_jump"`                // the full fix is on a different line than the installed version
 	KeepLineTo    string   `json:"keep_line_to,omitempty"`    // best fix that stays on the installed line
 	KeepLineFixes int      `json:"keep_line_fixes,omitempty"` // findings that fix resolves
+	UsedBy        []string `json:"used_by,omitempty"`
 }
 
 func Label(score float64) string {
@@ -78,7 +80,7 @@ func Summarize(fs []Finding, compare func(a, b string) int, line func(string) st
 		if !ok {
 			i = len(out)
 			idx[k] = i
-			out = append(out, PackageSummary{Package: f.Package, Installed: f.Version, Score: f.Score, Binaries: f.Binaries})
+			out = append(out, PackageSummary{Package: f.Package, Installed: f.Version, Score: f.Score, Binaries: f.Binaries, UsedBy: f.UsedBy})
 		}
 		s := &out[i]
 		s.Findings++
@@ -184,14 +186,29 @@ func Table(w io.Writer, fs []Finding) {
 		fmt.Fprintln(w, "No findings.")
 		return
 	}
+	withUsedBy := false
+	for _, f := range fs {
+		if len(f.UsedBy) > 0 {
+			withUsedBy = true
+			break
+		}
+	}
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "SEVERITY\tPACKAGE\tINSTALLED\tFIXED IN\tID")
+	head := "SEVERITY\tPACKAGE\tINSTALLED\tFIXED IN\tID"
+	if withUsedBy {
+		head += "\tUSED BY"
+	}
+	fmt.Fprintln(tw, head)
 	for _, f := range fs {
 		fixed := f.Fixed
 		if fixed == "" {
 			fixed = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", Label(f.Score), f.Package, f.Version, fixed, f.ID)
+		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s", Label(f.Score), f.Package, f.Version, fixed, f.ID)
+		if withUsedBy {
+			row += "\t" + usedByText(f.UsedBy)
+		}
+		fmt.Fprintln(tw, row)
 	}
 	tw.Flush()
 }
@@ -201,16 +218,38 @@ func SummaryTable(w io.Writer, ps []PackageSummary) {
 		fmt.Fprintln(w, "No findings.")
 		return
 	}
+	withUsedBy := false
+	for _, p := range ps {
+		if len(p.UsedBy) > 0 {
+			withUsedBy = true
+			break
+		}
+	}
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "SEVERITY\tPACKAGE\tINSTALLED\tUPGRADE TO\tFINDINGS")
+	head := "SEVERITY\tPACKAGE\tINSTALLED\tUPGRADE TO\tFINDINGS"
+	if withUsedBy {
+		head += "\tUSED BY"
+	}
+	fmt.Fprintln(tw, head)
 	for _, p := range ps {
 		up := p.UpgradeTo
 		if up == "" {
 			up = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\n", Label(p.Score), p.Package, p.Installed, up, p.Findings)
+		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%d", Label(p.Score), p.Package, p.Installed, up, p.Findings)
+		if withUsedBy {
+			row += "\t" + usedByText(p.UsedBy)
+		}
+		fmt.Fprintln(tw, row)
 	}
 	tw.Flush()
+}
+
+func usedByText(names []string) string {
+	if len(names) <= 3 {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:3], ", ") + fmt.Sprintf(" +%d more", len(names)-3)
 }
 
 func JSON(w io.Writer, fs []Finding) error {
@@ -283,4 +322,22 @@ func shellWord(s string) string {
 		return s
 	}
 	return shellQuote(s)
+}
+
+var goPkgPath = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~/+-]*$`)
+
+// FixCommandGo returns one "go install <package>@latest" line per package path,
+// or "" if there are none. Paths are validated so the result is safe to paste.
+func FixCommandGo(pkgPaths []string) string {
+	seen := map[string]bool{}
+	var lines []string
+	for _, p := range pkgPaths {
+		if !goPkgPath.MatchString(p) || seen[p] {
+			continue
+		}
+		seen[p] = true
+		lines = append(lines, "go install "+p+"@latest")
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
 }

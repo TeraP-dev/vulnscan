@@ -58,4 +58,8 @@ func TestSuperseded(t *testing.T) {
 	if superseded(dla, map[string]bool{"DLA-1-1": true, "UBUNTU-CVE-1": true}) {
 		t.Error("only USN and PYSEC records are superseded this way")
 	}
+	goRec := parse(`{"id":"GO-2021-0113","aliases":["CVE-2021-38561","GHSA-ppp9-7jff-5vj2"]}`)
+	if !superseded(goRec, map[string]bool{"GO-2021-0113": true, "GHSA-ppp9-7jff-5vj2": true}) {
+		t.Error("a GO- record should be superseded by its GHSA alias")
+	}
 }

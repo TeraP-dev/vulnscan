@@ -61,7 +61,7 @@ vscan                 # no flags: show help
 -j, --json         JSON output, one entry per finding
 -a, --all          include findings with no fix yet
 -d, --details      one line per finding instead of per package
--f, --fix          list findings and print a command (apt, or pip with -p) that upgrades them
+-f, --fix        list findings and print a command that upgrades them
 -v, --version      print version
 -h, --help         show help
 ```
@@ -113,6 +113,22 @@ MEDIUM    pip       26.1.2     26.2.0      1
 - `UPGRADE TO` fixes everything, so it can be a major-version jump (urllib3 1.x
   to 2.x). A note on stderr then shows the best fix that stays on your major version.
 
+## Go binaries
+
+`vscan -g` reads the dependency list that every Go program carries inside itself and checks it against OSV, along with the Go version it was built with (shown as `stdlib`). It scans your Go bin folder, or the files and folders you name; put flags before paths:
+
+```
+$ vscan -g /tmp/oldgo/oldgo
+SEVERITY  PACKAGE            INSTALLED  UPGRADE TO  FINDINGS  USED BY
+HIGH      golang.org/x/text  0.3.5      0.41.0      4         oldgo
+UNKNOWN   stdlib             1.26.7     1.26.11     15        oldgo
+```
+
+- You can't upgrade a dependency inside a compiled program. `-f` prints `go install <package>@latest` for each affected binary installed from a release; run vscan again to see whether the new release fixed it. Binaries built from local source get no command.
+- A `stdlib` row means the binary was built with an older Go toolchain: update Go itself, then rebuild or reinstall.
+- Matching is by version, not by whether the vulnerable code is actually called. For that, use `govulncheck`.
+- Go's vulnerability database has no CVSS scores, so `stdlib` findings show `UNKNOWN`.
+
 ## How it works
 
 Installed packages are read from the dpkg status file and grouped by source
@@ -131,7 +147,7 @@ names follow PEP 503, versions are ordered by PEP 440, and duplicate
   For Ubuntu Pro (ESM) fixes use e.g. `-e Ubuntu:Pro:22.04:LTS`.
 - **Kali is best-effort.** OSV has no Kali ecosystem, so use the Debian release
   Kali tracks and expect some mismatches.
-- **Not scanned:** npm, snap, Go binaries, anything installed by hand.
+- **Not scanned:** npm, snap, anything installed by hand.
 - **Findings with no fix are hidden** (`-a` shows them; expect noise). "No fix"
   in the data does not mean you are safe or unpatched.
 - **Severity is CVSS, not exploitability.**

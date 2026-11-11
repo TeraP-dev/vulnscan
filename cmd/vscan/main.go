@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/TeraP-dev/vulnscan/internal/pep440"
 	"github.com/TeraP-dev/vulnscan/internal/progress"
 	"github.com/TeraP-dev/vulnscan/internal/report"
+	"github.com/TeraP-dev/vulnscan/internal/semver"
 )
 
 const defaultStatus = "/var/lib/dpkg/status"
@@ -35,15 +37,16 @@ Flags:
   -s, --status string      dpkg status file (default /var/lib/dpkg/status)
   -p, --pip                scan Python packages instead of system packages
       --python string      Python interpreter used with --pip (default python3)
+  -g, --go                 scan Go binaries (your Go bin folder, or the paths given after the flags)
   -j, --json               machine-readable output
   -a, --all                include findings with no fixed version yet
   -d, --details            list every finding instead of one line per package
-  -f, --fix                list findings and print a command (apt, or pip with -p) that upgrades them
+  -f, --fix                list findings and print a command that upgrades them
   -v, --version            print version and exit
   -h, --help               show this help
 
 Any flag other than -v and -h starts a scan; system packages are scanned
-unless you pass -p.
+unless you pass -p or -g.
 
 Examples:
   vscan -S                      scan this machine's system packages
@@ -51,6 +54,7 @@ Examples:
   vscan -f                      list findings and print the apt command to fix them
   vscan -p                      scan the Python packages of python3 on your PATH
   vscan -p --python ./venv/bin/python
+  vscan -g -f ~/go/bin          list findings in Go binaries and print go install commands
   vscan -j | jq .               JSON output
 
 Needs internet access: package names and versions are sent to api.osv.dev.
@@ -61,16 +65,17 @@ Exit codes: 0 no findings, 1 findings, 2 error, 130 interrupted
 
 type options struct {
 	ecosystem, statusPath, python string
-	pip, system                   bool
+	pip, system, goBin            bool
 	asJSON, all, details, fix     bool
+	goPaths                       []string
 }
 
-// target is one installed thing to look up in OSV.
 type target struct {
 	name     string   // name as queried
 	version  string   // version as queried
 	display  string   // name shown to the user
 	binaries []string // dpkg only: installed binary packages built from this source
+	usedBy   []string // Go only: binaries that contain this module
 }
 
 // buildVersion is set at release time with -ldflags "-X main.buildVersion=...".
@@ -121,6 +126,8 @@ func main() {
 	flag.BoolVar(&o.system, "S", false, "")
 	flag.BoolVar(&help, "help", false, "")
 	flag.BoolVar(&help, "h", false, "")
+	flag.BoolVar(&o.goBin, "go", false, "")
+	flag.BoolVar(&o.goBin, "g", false, "")
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	flag.Parse()
 
@@ -132,16 +139,23 @@ func main() {
 		fmt.Println("vscan", version())
 		return
 	}
-	if flag.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "vscan: unexpected argument %q\n\n", flag.Arg(0))
+	modes := 0
+	for _, on := range []bool{o.system, o.pip, o.goBin} {
+		if on {
+			modes++
+		}
+	}
+	if modes > 1 {
+		fatalf("--system, --pip and --go cannot be combined")
+	}
+	if (o.pip || o.goBin) && o.ecosystem != "" {
+		fatalf("--ecosystem only applies to system packages")
+	}
+	o.goPaths = flag.Args()
+	if len(o.goPaths) > 0 && !o.goBin {
+		fmt.Fprintf(os.Stderr, "vscan: unexpected argument %q\n\n", o.goPaths[0])
 		flag.Usage()
 		os.Exit(2)
-	}
-	if o.pip && o.ecosystem != "" {
-		fatalf("--pip and --ecosystem cannot be combined")
-	}
-	if o.pip && o.system {
-		fatalf("--pip and --system cannot be combined")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -175,11 +189,18 @@ func run(ctx context.Context, o options) (int, error) {
 	compare := debver.Compare
 	var line func(string) string // compatibility line of a version; nil when not applicable
 	var targets []target
+	var gobins []inventory.GoBinary
 	var err error
-	if o.pip {
+	switch {
+	case o.goBin:
+		ecosystem, compare = "Go", semver.Compare
+		if gobins, err = inventory.FindGoBinaries(o.goPaths); err == nil {
+			targets = goTargets(gobins)
+		}
+	case o.pip:
 		ecosystem, compare, line = "PyPI", pep440.Compare, pep440.Line
 		targets, err = pipTargets(ctx, o.python)
-	} else {
+	default:
 		if ecosystem == "" {
 			if ecosystem, err = detectEcosystem("/etc/os-release"); err != nil {
 				return 0, err
@@ -235,6 +256,7 @@ func run(ctx context.Context, o options) (int, error) {
 				Fixed:    fixed,
 				Summary:  v.Summary,
 				Binaries: t.binaries,
+				UsedBy:   t.usedBy,
 			})
 		}
 	}
@@ -259,9 +281,14 @@ func run(ctx context.Context, o options) (int, error) {
 		if len(notes) > 0 {
 			fmt.Fprintln(os.Stderr)
 		}
-		cmd := report.FixCommand(sums)
-		if o.pip {
+		var cmd string
+		switch {
+		case o.goBin:
+			cmd = report.FixCommandGo(goInstallPaths(gobins, findings))
+		case o.pip:
 			cmd = report.FixCommandPip(sums, o.python)
+		default:
+			cmd = report.FixCommand(sums)
 		}
 		if cmd != "" {
 			fmt.Println(cmd)
@@ -291,8 +318,11 @@ func run(ctx context.Context, o options) (int, error) {
 		fmt.Fprintln(os.Stderr)
 		if !o.details && !o.fix && len(sums) > 0 {
 			hint := "vscan -f for an apt command"
-			if o.pip {
+			switch {
+			case o.pip:
 				hint = "vscan -p -f for a pip command"
+			case o.goBin:
+				hint = "vscan -g -f for go install commands"
 			}
 			fmt.Fprintf(os.Stderr, "Run %s that applies these upgrades.\n", hint)
 		}
@@ -344,13 +374,77 @@ func pipTargets(ctx context.Context, python string) ([]target, error) {
 	return out, nil
 }
 
+// goTargets turns scanned binaries into one lookup per distinct (module, version),
+// remembering which binaries contain each. The Go toolchain is looked up as "stdlib".
+// OSV's Go data uses versions without the "v" prefix.
+func goTargets(bins []inventory.GoBinary) []target {
+	type key struct{ name, ver string }
+	idx := map[key]int{}
+	var out []target
+	add := func(name, ver, bin string) {
+		ver = strings.TrimPrefix(ver, "v")
+		k := key{name, ver}
+		i, ok := idx[k]
+		if !ok {
+			i = len(out)
+			idx[k] = i
+			out = append(out, target{name: name, version: ver, display: name})
+		}
+		if !contains(out[i].usedBy, bin) {
+			out[i].usedBy = append(out[i].usedBy, bin)
+		}
+	}
+	for _, b := range bins {
+		if b.GoVersion != "" {
+			add("stdlib", b.GoVersion, b.Name)
+		}
+		if b.Main.Version != "" {
+			add(b.Main.Path, b.Main.Version, b.Name)
+		}
+		for _, d := range b.Deps {
+			add(d.Path, d.Version, b.Name)
+		}
+	}
+	for i := range out {
+		sort.Strings(out[i].usedBy)
+	}
+	return out
+}
+
+// goInstallPaths returns the main package path of every scanned binary that has
+// findings and was installed from a release, so "go install <path>@latest" applies.
+func goInstallPaths(bins []inventory.GoBinary, findings []report.Finding) []string {
+	affected := map[string]bool{}
+	for _, f := range findings {
+		for _, n := range f.UsedBy {
+			affected[n] = true
+		}
+	}
+	var out []string
+	for _, b := range bins {
+		if affected[b.Name] && b.Main.Version != "" && b.PkgPath != "" {
+			out = append(out, b.PkgPath)
+		}
+	}
+	return out
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
 // superseded reports whether v is covered by another returned record: a PYSEC
 // record whose alias was also returned (the GHSA twin), or a USN notice whose
 // per-CVE UBUNTU-CVE records were returned (they carry the release-specific
 // fix and severity).
 func superseded(v *osv.Vuln, returned map[string]bool) bool {
 	switch {
-	case strings.HasPrefix(v.ID, "PYSEC-"):
+	case strings.HasPrefix(v.ID, "PYSEC-") || strings.HasPrefix(v.ID, "GO-"):
 		for _, a := range v.Aliases {
 			if returned[a] {
 				return true

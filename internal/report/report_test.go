@@ -126,3 +126,14 @@ func TestEmptyTables(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestFixCommandGo(t *testing.T) {
+	got := FixCommandGo([]string{"github.com/b/tool/cmd/b", "github.com/a/a", "github.com/a/a", "x; rm -rf ~", "$(id)", "-evil"})
+	want := "go install github.com/a/a@latest\ngo install github.com/b/tool/cmd/b@latest"
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if FixCommandGo(nil) != "" {
+		t.Error("no packages should give an empty command")
+	}
+}
