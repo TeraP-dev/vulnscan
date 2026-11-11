@@ -570,6 +570,9 @@ func detectEcosystem(path string) (string, error) {
 			kv[k] = strings.Trim(v, `"'`)
 		}
 	}
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("reading %s: %w", path, err)
+	}
 	switch kv["ID"] {
 	case "debian":
 		if v := kv["VERSION_ID"]; v != "" {
